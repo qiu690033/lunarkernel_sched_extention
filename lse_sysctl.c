@@ -22,9 +22,15 @@ int frame_per_sec = 120;
 static int window_stats_policy_minval = WINDOW_STATS_RECENT;
 static int window_stats_policy_maxval = WINDOW_STATS_INVALID_POLICY;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+static int lse_proc_sched_ravg_window_update(const struct ctl_table *table,
+				int write, void __user *buffer, size_t *lenp,
+				loff_t *ppos)
+#else
 static int lse_proc_sched_ravg_window_update(struct ctl_table *table,
 				int write, void __user *buffer, size_t *lenp,
 				loff_t *ppos)
+#endif
 {
 	int ret = -EPERM;
 	int val;

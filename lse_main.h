@@ -55,7 +55,7 @@ do {										\
 #define SCHED_ACCOUNT_WAIT_TIME 0
 
 #define lts_to_ts(lts)	(lts->task)
-#define LTS_IDX 63
+#define LTS_IDX (ARRAY_SIZE(((struct task_struct *)0)->android_vendor_data1) - 1)
 #define RAVG_HIST_SIZE 	5
 
 #define DEFAULT_SCHED_RAVG_WINDOW 8000000

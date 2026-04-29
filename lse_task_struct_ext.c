@@ -14,7 +14,6 @@
 #include <linux/smp.h>
 #include <linux/rwsem.h>
 #include <trace/hooks/sched.h>
-#include <../kernel/sched/sched.h>
 
 #include "lse_main.h"
 

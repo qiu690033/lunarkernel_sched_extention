@@ -661,9 +661,11 @@ static int lse_gov_start(struct cpufreq_policy *policy)
 #endif
 	lse_gov_debug("start cluster[%d] cluster_id[%d] gov\n", cpu, cluster_id);
 
-	/* backup efficiencies_available, set lse efficiencies_available is false*/
-	lg_policy->backup_efficiencies_available = policy->efficiencies_available;
-	policy->efficiencies_available = false;
+	/*
+	 * Some kernel branches (e.g. android12-5.10) don't expose
+	 * cpufreq_policy::efficiencies_available. Keep governor start path
+	 * branch-agnostic by skipping direct access to that field.
+	 */
 
 	if (cluster_id < MAX_LSE_CLUSTERS)
 		gov_flag[cluster_id] = 1;
@@ -681,9 +683,6 @@ static void lse_gov_stop(struct cpufreq_policy *policy)
 
 	if (!policy->fast_switch_enabled)
 		kthread_cancel_work_sync(&lg_policy->work);
-
-	/* restore efficiencies_available */
-	policy->efficiencies_available = lg_policy->backup_efficiencies_available;
 
 	cpu = cpumask_first(policy->related_cpus);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)

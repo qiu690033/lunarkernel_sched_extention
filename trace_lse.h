@@ -80,7 +80,12 @@ TRACE_EVENT(lse_run_window_rollover,
 #endif /*_TRACE_LSE_H_ */
 
 #undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH .
+/*
+ * Path is resolved relative to include/trace/define_trace.h.
+ * For external-module build under drivers/staging/lunarkernel_sched_extention,
+ * use the full relative path from include/trace.
+ */
+#define TRACE_INCLUDE_PATH ../../drivers/staging/lunarkernel_sched_extention
 
 #undef TRACE_INCLUDE_FILE
 #define TRACE_INCLUDE_FILE trace_lse

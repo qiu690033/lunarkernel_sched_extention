@@ -1,0 +1,53 @@
+name: Build LSE LKM
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feat/**
+      - dev
+
+jobs:
+  build-lkm:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - arm64
+        kmi:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+    uses: ./.github/workflows/ddk-lse.yml
+    secrets: inherit
+    with:
+      arch: ${{ matrix.arch }}
+      kmi: ${{ matrix.kmi }}
+      lse_ref: ${{ github.ref_name }}
+      ddk_release: "20251104"
+
+  merge-lkm:
+    name: Merge all LSE LKM artifacts
+    needs: build-lkm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all LKM artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Merge into lkm folder
+        run: |
+          mkdir -p lkm
+          find . -name "*.ko" -path "*lunar_bsp_ext_sched*" -exec cp {} lkm/ \;
+          ls -la lkm/
+
+      - name: Upload combined LKM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lse-lkm-all
+          path: lkm/

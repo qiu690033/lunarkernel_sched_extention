@@ -116,5 +116,7 @@ void lse_cfs_hooks_register(void)
 {
     register_trace_android_vh_scheduler_tick(lse_scheduler_tick_cb, NULL);
     register_trace_android_rvh_schedule(lse_schedule, NULL);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
     register_trace_android_rvh_tick_entry(lse_tick_entry, NULL);
+#endif
 }

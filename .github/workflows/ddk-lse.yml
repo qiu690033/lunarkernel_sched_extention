@@ -1,0 +1,104 @@
+name: Build LSE Kernel Module
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: "Target architecture (DDK currently supports arm64 only)"
+        required: true
+        type: string
+      kmi:
+        description: "KMI version"
+        required: true
+        type: string
+      lse_ref:
+        description: "LSE git ref (branch/tag/commit)"
+        required: false
+        default: ""
+        type: string
+      ddk_release:
+        description: "DDK release version"
+        required: false
+        default: "20251104"
+        type: string
+
+jobs:
+  build-lse-ko:
+    name: Build lunar_bsp_ext_sched.ko for ${{ inputs.kmi }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk:${{ inputs.kmi }}-${{ inputs.ddk_release }}
+      options: --privileged
+    env:
+      TARGET_ARCH: ${{ inputs.arch }}
+      KMI: ${{ inputs.kmi }}
+      OUT: ${{ github.workspace }}/out
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.lse_ref != '' && inputs.lse_ref || github.ref_name }}
+
+      - name: Fix git safe.directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Validate target arch
+        run: |
+          if [ "$TARGET_ARCH" != "arm64" ]; then
+            echo "DDK workflow currently supports arm64 only, got: $TARGET_ARCH"
+            exit 1
+          fi
+
+      - name: Build lunar_bsp_ext_sched.ko
+        run: |
+          set -euo pipefail
+          if [ -z "${KDIR:-}" ] || [ ! -f "$KDIR/Makefile" ]; then
+            echo "KDIR is not available inside DDK container: ${KDIR:-<empty>}"
+            exit 1
+          fi
+
+          if [ -L "$KDIR/source" ]; then
+            KSRC="$(readlink -f "$KDIR/source")"
+          elif [ -n "${KERNEL_SRC:-}" ] && [ -f "${KERNEL_SRC}/Makefile" ]; then
+            KSRC="${KERNEL_SRC}"
+          else
+            KSRC="$KDIR"
+          fi
+
+          if [ -d "$KSRC/drivers/staging" ]; then
+            STAGING_DIR="$KSRC/drivers/staging"
+          elif [ -d "$KSRC/common/drivers/staging" ]; then
+            STAGING_DIR="$KSRC/common/drivers/staging"
+          else
+            echo "drivers/staging not found under KSRC: $KSRC"
+            exit 1
+          fi
+
+          echo "KDIR=$KDIR"
+          echo "KSRC=$KSRC"
+          echo "STAGING_DIR=$STAGING_DIR"
+          ls -la "$STAGING_DIR" || true
+
+          LSE_DIR="$STAGING_DIR/lunarkernel_sched_extention"
+          ln -sfn "$GITHUB_WORKSPACE" "$LSE_DIR"
+
+          make -C "$KDIR" O="$KDIR" ARCH="$TARGET_ARCH" LLVM=1 olddefconfig
+          make -C "$KDIR" O="$KDIR" ARCH="$TARGET_ARCH" LLVM=1 modules_prepare
+          make -C "$KDIR" O="$KDIR" ARCH="$TARGET_ARCH" LLVM=1 \
+            CONFIG_LUNAR_SCHED_EXT=m \
+            M="$LSE_DIR" \
+            modules
+
+          mkdir -p "$OUT"
+          KO_FILE="${KMI}_${TARGET_ARCH}_lunar_bsp_ext_sched.ko"
+          cp "$LSE_DIR/lunar_bsp_ext_sched.ko" "$OUT/$KO_FILE"
+          llvm-strip -d "$OUT/$KO_FILE" 2>/dev/null || true
+          ls -la "$OUT/"
+
+      - name: Upload .ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.kmi }}_${{ env.TARGET_ARCH }}_lunar_bsp_ext_sched.ko
+          path: ${{ env.OUT }}/${{ inputs.kmi }}_${{ env.TARGET_ARCH }}_lunar_bsp_ext_sched.ko
