@@ -30,8 +30,21 @@
 #include <linux/timer.h>
 #include <trace/hooks/sched.h>
 
+#if __has_include(<../kernel/sched/sched.h>)
 #include <../kernel/sched/sched.h>
+#elif __has_include(<kernel/sched/sched.h>)
+#include <kernel/sched/sched.h>
+#else
+#error "lse: cannot find sched internal header"
+#endif
+
+#if __has_include(<../kernel/time/tick-sched.h>)
 #include <../kernel/time/tick-sched.h>
+#elif __has_include(<kernel/time/tick-sched.h>)
+#include <kernel/time/tick-sched.h>
+#else
+#error "lse: cannot find tick-sched internal header"
+#endif
 
 #define LSE_DEBUG_FTRACE		(1 << 0)
 #define LSE_DEBUG_SYSTRACE		(1 << 1)
@@ -150,6 +163,17 @@ static inline struct lse_task_struct *get_lse_task_struct(struct task_struct *t)
     return lts;
 }
 extern int lse_task_struct_ext_init(void);
+
+static inline bool lse_task_on_rq(struct task_struct *p)
+{
+	if (!p)
+		return false;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
+	return task_on_rq_queued(p);
+#else
+	return p->on_rq;
+#endif
+}
 
 /* lse_sched_cluster.c */
 extern int lse_num_sched_clusters;

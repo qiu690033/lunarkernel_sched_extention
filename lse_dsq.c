@@ -58,7 +58,7 @@ static void lse_dsq_compact_locked(struct lse_dsq_cpu *dsq, int cpu)
 
 		lts = list_entry(pos, struct lse_task_struct, dsq_node);
 		p = lts_to_ts(lts);
-		if (!p || !p->on_rq || task_cpu(p) != cpu) {
+		if (!p || !lse_task_on_rq(p) || task_cpu(p) != cpu) {
 			lse_dsq_detach_locked(lts);
 			dsq->depth = max(0, dsq->depth - 1);
 		}
@@ -157,7 +157,8 @@ void lse_dsq_on_schedule(struct rq *rq, struct task_struct *prev,
 	if (lse_dsq_task_valid(next))
 		lse_dsq_dequeue_locked(dsq, next);
 
-	if (lse_dsq_task_valid(prev) && prev->on_rq && task_cpu(prev) == cpu)
+	if (lse_dsq_task_valid(prev) && lse_task_on_rq(prev) &&
+	    task_cpu(prev) == cpu)
 		lse_dsq_enqueue_locked(dsq, prev);
 
 	raw_spin_unlock_irqrestore(&dsq->lock, flags);

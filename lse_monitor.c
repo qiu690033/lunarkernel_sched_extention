@@ -132,8 +132,8 @@ static void lse_heartbeat_timer_fn(struct timer_list *timer)
 
 static void lse_watchdog_workfn(struct work_struct *work)
 {
-	(void)work;
 	unsigned long timeout = READ_ONCE(lse_watchdog_timeout);
+	(void)work;
 
 	if (!READ_ONCE(watchdog_enable))
 		return;

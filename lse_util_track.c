@@ -78,7 +78,7 @@ static inline u8 lse_task_classify(struct task_struct *p)
 		break;
 	}
 
-	if (p->nice < 0 || p->prio <= lse_fg_prio_threshold)
+	if (task_nice(p) < 0 || p->prio <= lse_fg_prio_threshold)
 		return LSE_TASK_CLASS_FOREGROUND;
 
 	if (p->prio <= DEFAULT_PRIO + 4)
@@ -162,7 +162,7 @@ account_busy_for_task_demand(struct rq *rq, struct task_struct *p, int event)
 		if (rq->curr == p)
 			return 1;
 
-		return p->on_rq ? SCHED_ACCOUNT_WAIT_TIME : 0;
+		return lse_task_on_rq(p) ? SCHED_ACCOUNT_WAIT_TIME : 0;
 	}
 
 	return 1;

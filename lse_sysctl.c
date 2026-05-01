@@ -16,6 +16,12 @@
 
 #include "lse_main.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#define LSE_CTL_TABLE_ARG const struct ctl_table
+#else
+#define LSE_CTL_TABLE_ARG struct ctl_table
+#endif
+
 int slim_walt_ctrl = 1;
 int frame_per_sec = 120;
 unsigned int highres_tick_ctrl;
@@ -30,15 +36,9 @@ static int lse_boost_maxval = 4096;
 static int lse_dsq_depth_minval = 1;
 static int lse_dsq_depth_maxval = 4096;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
-static int lse_proc_shadow_tick_update(const struct ctl_table *table,
+static int lse_proc_shadow_tick_update(LSE_CTL_TABLE_ARG *table,
 				int write, void __user *buffer, size_t *lenp,
 				loff_t *ppos)
-#else
-static int lse_proc_shadow_tick_update(struct ctl_table *table,
-				int write, void __user *buffer, size_t *lenp,
-				loff_t *ppos)
-#endif
 {
 	int ret;
 	unsigned int val;
@@ -67,15 +67,9 @@ static int lse_proc_shadow_tick_update(struct ctl_table *table,
 	return ret;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
-static int lse_proc_sched_ravg_window_update(const struct ctl_table *table,
+static int lse_proc_sched_ravg_window_update(LSE_CTL_TABLE_ARG *table,
 				int write, void __user *buffer, size_t *lenp,
 				loff_t *ppos)
-#else
-static int lse_proc_sched_ravg_window_update(struct ctl_table *table,
-				int write, void __user *buffer, size_t *lenp,
-				loff_t *ppos)
-#endif
 {
 	int ret = -EPERM;
 	int val;
@@ -102,15 +96,9 @@ unlock:
 	return ret;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
-static int lse_proc_monitor_toggle_update(const struct ctl_table *table,
+static int lse_proc_monitor_toggle_update(LSE_CTL_TABLE_ARG *table,
 				int write, void __user *buffer, size_t *lenp,
 				loff_t *ppos)
-#else
-static int lse_proc_monitor_toggle_update(struct ctl_table *table,
-				int write, void __user *buffer, size_t *lenp,
-				loff_t *ppos)
-#endif
 {
 	int ret;
 	int val;
@@ -135,15 +123,9 @@ static int lse_proc_monitor_toggle_update(struct ctl_table *table,
 	return ret;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
-static int lse_proc_dsq_toggle_update(const struct ctl_table *table,
+static int lse_proc_dsq_toggle_update(LSE_CTL_TABLE_ARG *table,
 				int write, void __user *buffer, size_t *lenp,
 				loff_t *ppos)
-#else
-static int lse_proc_dsq_toggle_update(struct ctl_table *table,
-				int write, void __user *buffer, size_t *lenp,
-				loff_t *ppos)
-#endif
 {
 	int ret;
 	int val;
