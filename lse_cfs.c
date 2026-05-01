@@ -67,10 +67,14 @@ void lse_scheduler_tick(void)
 
 		atomic64_set(&lse_run_rollover_lastq_ws, tick_sched_clock);
 	}
+
+	lse_monitor_touch();
 }
 
 static void lse_scheduler_tick_cb(void *unused, struct rq *rq)
 {
+	(void)unused;
+	(void)rq;
 	lse_scheduler_tick();
 }
 
@@ -98,14 +102,20 @@ static void lse_schedule(void *unused, struct task_struct *prev, struct task_str
 			lse_update_task_ravg(next_lts, next, rq, PICK_NEXT_TASK, lse_rq_clock(rq));
 	} else if (prev_lts)
 		lse_update_task_ravg(prev_lts, prev, rq, TASK_UPDATE, lse_rq_clock(rq));
+
+	lse_dsq_on_schedule(rq, prev, next);
+	lse_shadow_tick_update_cpu(rq);
 }
 
 void lse_tick_entry(void *unused, struct rq *rq)
 {
+	(void)unused;
 	struct lse_task_struct *curr_lts;
 
 	if (!slim_walt_ctrl)
 		return;
+
+	lse_monitor_touch();
 
 	curr_lts = get_lse_task_struct(rq->curr);
 	if (curr_lts)

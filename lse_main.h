@@ -22,8 +22,12 @@
 #include <linux/list_sort.h>
 #include <linux/notifier.h>
 #include <linux/slab.h>
+#include <linux/interrupt.h>
 #include <linux/sched/clock.h>
 #include <linux/sched/cputime.h>
+#include <linux/hrtimer.h>
+#include <linux/workqueue.h>
+#include <linux/timer.h>
 #include <trace/hooks/sched.h>
 
 #include <../kernel/sched/sched.h>
@@ -70,6 +74,15 @@ enum task_event {
 	IRQ_UPDATE      = 5,
 };
 
+enum lse_task_class {
+	LSE_TASK_CLASS_IDLE = 0,
+	LSE_TASK_CLASS_BACKGROUND,
+	LSE_TASK_CLASS_NORMAL,
+	LSE_TASK_CLASS_FOREGROUND,
+	LSE_TASK_CLASS_RT,
+	LSE_TASK_CLASS_DEADLINE,
+};
+
 struct lse_task_struct {
 	struct task_struct *task;
 
@@ -80,6 +93,12 @@ struct lse_task_struct {
 	int	cidx;
 	u32	demand;
 	u16	demand_scaled;
+	u8	task_class;
+	u16	boost_pct;
+	u8	priority_hint;
+	u8	_reserved;
+	struct list_head dsq_node;
+	u8	on_dsq;
 } ____cacheline_aligned;
 
 struct lse_sched_cluster {
@@ -158,6 +177,10 @@ extern void lse_sysctl_init(void);
 /* lse_util_track.c */
 extern atomic64_t lse_run_rollover_lastq_ws;
 extern int sched_window_stats_policy;
+extern int lse_fg_prio_threshold;
+extern int lse_boost_bg_pct;
+extern int lse_boost_fg_pct;
+extern int lse_boost_rt_pct;
 extern u64 tick_sched_clock;
 extern unsigned int lse_sched_ravg_window;
 extern unsigned int new_lse_sched_ravg_window;
@@ -167,6 +190,27 @@ extern void lse_update_task_ravg(struct lse_task_struct *lts, struct task_struct
 extern u16 lse_cpu_util(int cpu);
 extern void lse_sched_stats_init(void);
 extern void sched_ravg_window_change(int frame_per_sec);
+
+/* lse_monitor.c */
+extern int slim_stats;
+extern int heartbeat;
+extern int heartbeat_enable;
+extern int watchdog_enable;
+extern void lse_monitor_init(void);
+extern void lse_monitor_sync(void);
+extern void lse_monitor_touch(void);
+extern void lse_stats_record_update(void);
+extern void lse_stats_record_rollover(void);
+
+/* lse_dsq.c */
+extern int lse_dsq_enable;
+extern int lse_dsq_rescue_enable;
+extern int lse_dsq_max_depth;
+extern void lse_dsq_init(void);
+extern void lse_dsq_sync(void);
+extern void lse_dsq_on_schedule(struct rq *rq, struct task_struct *prev,
+				struct task_struct *next);
+extern int lse_dsq_depth_cpu(int cpu);
 
 /*util = runtime * 1024 / window_size */
 static inline u64 lse_scale_time_to_util(u64 d)
@@ -189,6 +233,13 @@ static inline void lse_fixup_window_dep(void)
 extern void lse_scheduler_tick(void);
 extern void lse_tick_entry(void *unused, struct rq *rq);
 extern void lse_cfs_hooks_register(void);
+
+/* lse_shadow_tick.c */
+extern unsigned int highres_tick_ctrl;
+extern unsigned int highres_tick_ctrl_dbg;
+extern void lse_shadow_tick_init(void);
+extern void lse_shadow_tick_sync_all(void);
+extern void lse_shadow_tick_update_cpu(struct rq *rq);
 
 /* cpufreq_lse.c */
 extern unsigned int sysctl_lse_gov_debug;

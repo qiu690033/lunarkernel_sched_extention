@@ -58,6 +58,57 @@ atomic64_t lse_run_rollover_lastq_ws;
 u64 tick_sched_clock;
 
 int sched_window_stats_policy;
+int lse_fg_prio_threshold = DEFAULT_PRIO - 2;
+int lse_boost_bg_pct = 1024;
+int lse_boost_fg_pct = 1280;
+int lse_boost_rt_pct = 1536;
+
+static inline u8 lse_task_classify(struct task_struct *p)
+{
+	if (is_idle_task(p))
+		return LSE_TASK_CLASS_IDLE;
+
+	switch (p->policy) {
+	case SCHED_FIFO:
+	case SCHED_RR:
+		return LSE_TASK_CLASS_RT;
+	case SCHED_DEADLINE:
+		return LSE_TASK_CLASS_DEADLINE;
+	default:
+		break;
+	}
+
+	if (p->nice < 0 || p->prio <= lse_fg_prio_threshold)
+		return LSE_TASK_CLASS_FOREGROUND;
+
+	if (p->prio <= DEFAULT_PRIO + 4)
+		return LSE_TASK_CLASS_NORMAL;
+
+	return LSE_TASK_CLASS_BACKGROUND;
+}
+
+static inline int lse_task_boost_pct(struct task_struct *p)
+{
+	switch (lse_task_classify(p)) {
+	case LSE_TASK_CLASS_RT:
+	case LSE_TASK_CLASS_DEADLINE:
+		return max(1, READ_ONCE(lse_boost_rt_pct));
+	case LSE_TASK_CLASS_FOREGROUND:
+		return max(1, READ_ONCE(lse_boost_fg_pct));
+	case LSE_TASK_CLASS_NORMAL:
+		return 1024;
+	default:
+		return max(1, READ_ONCE(lse_boost_bg_pct));
+	}
+}
+
+static inline void lse_refresh_task_hint(struct lse_task_struct *lts,
+					 struct task_struct *p)
+{
+	lts->task_class = lse_task_classify(p);
+	lts->boost_pct = lse_task_boost_pct(p);
+	lts->priority_hint = (u8)p->prio;
+}
 
 inline u64 scale_exec_time(u64 delta, struct rq *rq)
 {
@@ -184,11 +235,22 @@ static inline unsigned int cpu_cur_freq(int cpu)
 static void
 update_task_rq_cpu_cycles(struct task_struct *p, struct rq *rq, u64 wallclock)
 {
+	(void)wallclock;
 	int cpu = cpu_of(rq);
 	struct lse_rq *lrq = &per_cpu(lse_rq, cpu_of(rq));
+	struct lse_task_struct *lts = get_lse_task_struct(p);
+	u64 scale;
+	unsigned int max_freq = get_max_freq(cpu);
 
-	lrq->task_exec_scale = DIV64_U64_ROUNDUP(cpu_cur_freq(cpu) *
-					arch_scale_cpu_capacity(cpu), get_max_freq(cpu));
+	if (unlikely(!max_freq))
+		scale = arch_scale_cpu_capacity(cpu);
+	else
+		scale = DIV64_U64_ROUNDUP(cpu_cur_freq(cpu) *
+					  arch_scale_cpu_capacity(cpu), max_freq);
+	if (lts && lts->boost_pct)
+		scale = (scale * lts->boost_pct) >> 10;
+
+	lrq->task_exec_scale = max_t(u64, 1, scale);
 }
 
 /*
@@ -429,6 +491,8 @@ void lse_window_rollover_run_once(u64 old_window_start, struct rq *rq)
 	trace_lse_run_window_rollover(old_window_start, new_window_start);
 	if (dump_info & LSE_DEBUG_SYSTRACE)
 		window_rollover_systrace_c();
+
+	lse_stats_record_rollover();
 }
 
 void lse_update_task_ravg(struct lse_task_struct *lts, struct task_struct *p, struct rq *rq, int event, u64 wallclock)
@@ -438,6 +502,8 @@ void lse_update_task_ravg(struct lse_task_struct *lts, struct task_struct *p, st
 
 	if(!slim_walt_ctrl)
 		return;
+
+	lse_refresh_task_hint(lts, p);
 
 	if(!lrq->window_start || lts->mark_start == wallclock)
 		return;
@@ -477,6 +543,7 @@ done:
 			lts->mark_start, lts->window_start, rq->cpu, event);
 
 	lse_window_rollover_run_once(old_window_start, rq);
+	lse_stats_record_update();
 }
 
 static void lse_irq_work(struct irq_work *irq_work)

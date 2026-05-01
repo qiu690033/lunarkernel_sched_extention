@@ -23,6 +23,9 @@ static void init_lse_task_struct(struct lse_task_struct *lts, struct task_struct
 {
     memset(lts, 0, sizeof(struct lse_task_struct));
     lts->task = tsk;
+	lts->task_class = LSE_TASK_CLASS_NORMAL;
+	lts->boost_pct = 1024;
+	lts->priority_hint = (u8)tsk->prio;
 }
 
 static void alloc_lse_task_struct(void *unused, struct task_struct *tsk,

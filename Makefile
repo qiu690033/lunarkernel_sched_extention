@@ -19,7 +19,10 @@ obj-$(CONFIG_LUNAR_SCHED_EXT) += lunar_bsp_ext_sched.o
 lunar_bsp_ext_sched-y := \
         cpufreq_lse.o \
 		lse_cfs.o \
+		lse_dsq.o \
         lse_main.o \
+		lse_monitor.o \
+		lse_shadow_tick.o \
 		lse_sched_cluster.o \
 		lse_sysctl.o \
 		lse_task_struct_ext.o \

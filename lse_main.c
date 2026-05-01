@@ -56,13 +56,16 @@ static struct syscore_ops lse_syscore_ops = {
 
 static int __init lunar_sched_ext_init(void)
 {
-    register_syscore_ops(&lse_syscore_ops);
-    lse_task_struct_ext_init();
+	register_syscore_ops(&lse_syscore_ops);
+	lse_task_struct_ext_init();
 	lse_sched_cluster_init();
-    lse_sysctl_init();
+	lse_dsq_init();
 	lse_sched_stats_init();
-    lse_cfs_hooks_register();
-    lse_cpufreq_init();
+	lse_monitor_init();
+	lse_shadow_tick_init();
+	lse_sysctl_init();
+	lse_cfs_hooks_register();
+	lse_cpufreq_init();
 	return 0;
 }
 
