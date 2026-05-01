@@ -235,12 +235,12 @@ static inline unsigned int cpu_cur_freq(int cpu)
 static void
 update_task_rq_cpu_cycles(struct task_struct *p, struct rq *rq, u64 wallclock)
 {
-	(void)wallclock;
 	int cpu = cpu_of(rq);
 	struct lse_rq *lrq = &per_cpu(lse_rq, cpu_of(rq));
 	struct lse_task_struct *lts = get_lse_task_struct(p);
 	u64 scale;
 	unsigned int max_freq = get_max_freq(cpu);
+	(void)wallclock;
 
 	if (unlikely(!max_freq))
 		scale = arch_scale_cpu_capacity(cpu);
