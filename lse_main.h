@@ -267,7 +267,18 @@ extern void lse_shadow_tick_update_cpu(struct rq *rq);
 
 /* cpufreq_lse.c */
 extern unsigned int sysctl_lse_gov_debug;
+extern int util_norm_enable;
+extern int cluster_window_enable;
+extern int cluster_tl_dyn_enable;
+extern int cluster_freq_cap_enable;
+extern int cluster_agg_mode;
+extern int gov_legacy_formula_enable;
 extern void run_lse_irq_work_rollover(void);
 extern int lse_cpufreq_init(void);
+extern unsigned int lse_gov_cluster_window_ns(int cpu);
+extern unsigned int lse_gov_cluster_target_load_dyn(int cpu);
+extern unsigned int lse_gov_cluster_agg_util(int cpu);
+extern unsigned int lse_gov_cluster_freq_cap_applied(int cpu);
+extern unsigned int lse_gov_cluster_power_pressure(int cpu);
 
 #endif /* _LSE_MAIN_H_ */

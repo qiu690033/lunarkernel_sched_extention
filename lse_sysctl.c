@@ -35,6 +35,10 @@ static int lse_boost_minval = 1;
 static int lse_boost_maxval = 4096;
 static int lse_dsq_depth_minval = 1;
 static int lse_dsq_depth_maxval = 4096;
+static int lse_bool_minval = 0;
+static int lse_bool_maxval = 1;
+static int lse_agg_mode_minval = 0;
+static int lse_agg_mode_maxval = 1;
 
 static int lse_proc_shadow_tick_update(LSE_CTL_TABLE_ARG *table,
 				int write, void __user *buffer, size_t *lenp,
@@ -287,6 +291,60 @@ struct ctl_table lse_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0666,
 		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "util_norm_enable",
+		.data		= &util_norm_enable,
+		.maxlen		= sizeof(int),
+		.mode		= 0666,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &lse_bool_minval,
+		.extra2		= &lse_bool_maxval,
+	},
+	{
+		.procname	= "cluster_window_enable",
+		.data		= &cluster_window_enable,
+		.maxlen		= sizeof(int),
+		.mode		= 0666,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &lse_bool_minval,
+		.extra2		= &lse_bool_maxval,
+	},
+	{
+		.procname	= "cluster_tl_dyn_enable",
+		.data		= &cluster_tl_dyn_enable,
+		.maxlen		= sizeof(int),
+		.mode		= 0666,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &lse_bool_minval,
+		.extra2		= &lse_bool_maxval,
+	},
+	{
+		.procname	= "cluster_freq_cap_enable",
+		.data		= &cluster_freq_cap_enable,
+		.maxlen		= sizeof(int),
+		.mode		= 0666,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &lse_bool_minval,
+		.extra2		= &lse_bool_maxval,
+	},
+	{
+		.procname	= "cluster_agg_mode",
+		.data		= &cluster_agg_mode,
+		.maxlen		= sizeof(int),
+		.mode		= 0666,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &lse_agg_mode_minval,
+		.extra2		= &lse_agg_mode_maxval,
+	},
+	{
+		.procname	= "gov_legacy_formula_enable",
+		.data		= &gov_legacy_formula_enable,
+		.maxlen		= sizeof(int),
+		.mode		= 0666,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &lse_bool_minval,
+		.extra2		= &lse_bool_maxval,
 	},
     { },
 };

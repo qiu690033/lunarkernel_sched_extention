@@ -167,6 +167,12 @@ static ssize_t lse_proc_status_read(struct file *file, char __user *buf,
 		"dsq_rescue_enable=%d\n"
 		"dsq_max_depth=%d\n"
 		"shadow_tick_enable=%u\n"
+		"util_norm_enable=%d\n"
+		"cluster_window_enable=%d\n"
+		"cluster_tl_dyn_enable=%d\n"
+		"cluster_freq_cap_enable=%d\n"
+		"cluster_agg_mode=%d\n"
+		"gov_legacy_formula_enable=%d\n"
 		"heartbeat_age_jiffies=%lu\n"
 		"watchdog_age_jiffies=%lu\n"
 		"watchdog_timeout_jiffies=%lu\n",
@@ -183,6 +189,12 @@ static ssize_t lse_proc_status_read(struct file *file, char __user *buf,
 		READ_ONCE(lse_dsq_rescue_enable),
 		READ_ONCE(lse_dsq_max_depth),
 		READ_ONCE(highres_tick_ctrl),
+		READ_ONCE(util_norm_enable),
+		READ_ONCE(cluster_window_enable),
+		READ_ONCE(cluster_tl_dyn_enable),
+		READ_ONCE(cluster_freq_cap_enable),
+		READ_ONCE(cluster_agg_mode),
+		READ_ONCE(gov_legacy_formula_enable),
 		jiffies - READ_ONCE(lse_heartbeat_last_touch),
 		jiffies - READ_ONCE(lse_watchdog_timestamp),
 		READ_ONCE(lse_watchdog_timeout));
@@ -219,7 +231,7 @@ static ssize_t lse_proc_tasks_read(struct file *file, char __user *buf,
 	(void)file;
 
 	len += scnprintf(tmp + len, sizeof(tmp) - len,
-			 "cpu pid comm class boost prio demand scaled dsq_depth\n");
+			 "cpu pid comm class boost prio demand scaled dsq_depth cw_ns tl_dyn agg_util freq_cap power_pressure\n");
 	for_each_online_cpu(cpu) {
 		struct task_struct *p = cpu_rq(cpu)->curr;
 		struct lse_task_struct *lts = get_lse_task_struct(p);
@@ -228,12 +240,17 @@ static ssize_t lse_proc_tasks_read(struct file *file, char __user *buf,
 			continue;
 
 		len += scnprintf(tmp + len, sizeof(tmp) - len,
-				 "%d %d %s %s %u %u %u %u %d\n",
+				 "%d %d %s %s %u %u %u %u %d %u %u %u %u %u\n",
 				 cpu, p->pid, p->comm,
 				 lse_task_class_name(lts->task_class),
 				 lts->boost_pct, lts->priority_hint,
 				 lts->demand, lts->demand_scaled,
-				 lse_dsq_depth_cpu(cpu));
+				 lse_dsq_depth_cpu(cpu),
+				 lse_gov_cluster_window_ns(cpu),
+				 lse_gov_cluster_target_load_dyn(cpu),
+				 lse_gov_cluster_agg_util(cpu),
+				 lse_gov_cluster_freq_cap_applied(cpu),
+				 lse_gov_cluster_power_pressure(cpu));
 		if (len >= sizeof(tmp) - 96)
 			break;
 	}

@@ -42,6 +42,28 @@ do {										\
 #define DEFAULT_TARGET_LOAD 90
 
 static int gov_flag[MAX_LSE_CLUSTERS] = {0};
+int util_norm_enable = 1;
+int cluster_window_enable = 1;
+int cluster_tl_dyn_enable = 1;
+int cluster_freq_cap_enable = 1;
+int cluster_agg_mode = 1; /* 0: max, 1: top2_avg */
+int gov_legacy_formula_enable;
+
+#define LSE_AGG_MAX 0
+#define LSE_AGG_TOP2_AVG 1
+#define LSE_DEFAULT_CLUSTER_WINDOW_NS DEFAULT_SCHED_RAVG_WINDOW
+
+struct lse_cluster_gov_cfg {
+	unsigned int target_load_base;
+	unsigned int target_load_min;
+	unsigned int target_load_max;
+	unsigned int target_load_step;
+	unsigned int window_ns;
+	unsigned int freq_cap_max;
+	unsigned int freq_cap_min;
+};
+
+static struct lse_cluster_gov_cfg lse_cluster_cfg[MAX_LSE_CLUSTERS];
 
 struct lse_gov_tunables {
 	struct gov_attr_set		attr_set;
@@ -68,6 +90,18 @@ struct lse_gov_policy {
 	bool			work_in_progress;
 	unsigned int	target_load;
     bool            backup_efficiencies_available;
+	int		cluster_id;
+	unsigned int	target_load_base;
+	unsigned int	target_load_min;
+	unsigned int	target_load_max;
+	unsigned int	target_load_step;
+	unsigned int	cluster_window_ns;
+	unsigned int	cluster_freq_cap_max;
+	unsigned int	cluster_freq_cap_min;
+	unsigned int	last_agg_util;
+	unsigned int	last_power_pressure;
+	unsigned int	last_target_load_dyn;
+	unsigned int	last_freq_cap_applied;
 };
 
 struct lse_gov_cpu {
@@ -84,6 +118,100 @@ static DEFINE_PER_CPU(struct lse_gov_cpu, lse_gov_cpu);
 static DEFINE_PER_CPU(struct lse_gov_tunables *, cached_tunables);
 static DEFINE_MUTEX(global_tunables_lock);
 static struct lse_gov_tunables *global_tunables;
+
+static unsigned int lse_get_policy_window_ns(struct lse_gov_policy *lg_policy)
+{
+	if (!cluster_window_enable)
+		return lse_sched_ravg_window;
+	if (!lg_policy->cluster_window_ns)
+		return lse_sched_ravg_window;
+	return lg_policy->cluster_window_ns;
+}
+
+static unsigned int lse_norm_util_to_cpu(int cpu, u64 util)
+{
+	unsigned long cap;
+	u64 scaled = util;
+
+	if (!util_norm_enable)
+		return (unsigned int)min_t(u64, util, SCHED_CAPACITY_SCALE);
+
+	cap = arch_scale_cpu_capacity(cpu);
+	if (!cap)
+		cap = 1;
+	scaled = div64_u64((u64)util * SCHED_CAPACITY_SCALE, cap);
+	if (scaled > SCHED_CAPACITY_SCALE)
+		scaled = SCHED_CAPACITY_SCALE;
+	return (unsigned int)scaled;
+}
+
+static unsigned int lse_top2_avg_util(struct cpumask *mask)
+{
+	unsigned int top1 = 0, top2 = 0, util;
+	unsigned int cnt = 0;
+	int cpu;
+	struct lse_rq *lrq;
+	unsigned int win_ns;
+
+	for_each_cpu(cpu, mask) {
+		lrq = &per_cpu(lse_rq, cpu);
+		win_ns = lrq->prev_window_size ? lrq->prev_window_size : lse_sched_ravg_window;
+		if (!win_ns)
+			continue;
+		util = (unsigned int)min_t(u64,
+			div64_u64(lrq->prev_runnable_sum << SCHED_CAPACITY_SHIFT, win_ns),
+			SCHED_CAPACITY_SCALE);
+		util = lse_norm_util_to_cpu(cpu, util);
+		if (util >= top1) {
+			top2 = top1;
+			top1 = util;
+		} else if (util > top2) {
+			top2 = util;
+		}
+		cnt++;
+	}
+
+	if (!cnt)
+		return 0;
+	if (cnt == 1)
+		return top1;
+	return (top1 + top2) / 2;
+}
+
+static unsigned int lse_compute_power_pressure(struct lse_gov_policy *lg_policy,
+					       unsigned int agg_util)
+{
+	struct cpufreq_policy *policy = lg_policy->policy;
+	unsigned int cur = policy->cur;
+	unsigned int max = policy->cpuinfo.max_freq;
+	unsigned int pressure = 0;
+
+	if (max)
+		pressure = mult_frac(cur, 1024, max);
+	pressure = (pressure + agg_util) / 2;
+	return min(pressure, 1024U);
+}
+
+static unsigned int lse_dynamic_target_load(struct lse_gov_policy *lg_policy,
+					    unsigned int agg_util)
+{
+	unsigned int tl;
+	unsigned int pressure;
+
+	tl = lg_policy->target_load_base ? lg_policy->target_load_base : DEFAULT_TARGET_LOAD;
+	tl = clamp_t(unsigned int, tl, lg_policy->target_load_min, lg_policy->target_load_max);
+	if (!cluster_tl_dyn_enable)
+		return tl;
+
+	pressure = lse_compute_power_pressure(lg_policy, agg_util);
+	if (pressure > 850 && tl + lg_policy->target_load_step <= lg_policy->target_load_max)
+		tl += lg_policy->target_load_step;
+	else if (pressure < 450 && tl > lg_policy->target_load_min + lg_policy->target_load_step)
+		tl -= lg_policy->target_load_step;
+
+	lg_policy->last_power_pressure = pressure;
+	return clamp_t(unsigned int, tl, lg_policy->target_load_min, lg_policy->target_load_max);
+}
 
 static void lse_gov_work(struct kthread_work *work)
 {
@@ -115,21 +243,45 @@ static unsigned int get_next_freq(struct lse_gov_policy *lg_policy, u64 prev_run
 {
 	struct cpufreq_policy *policy = lg_policy->policy;
 	unsigned int freq = policy->cpuinfo.max_freq, next_f;
-	unsigned int window_size_tl, cluster_tl;
-	u64 divisor;
+	unsigned int cluster_tl, window_ns, agg_util;
+	u64 scaled_freq;
 	int cpu = cpumask_first(policy->cpus);
+	unsigned long cap = arch_scale_cpu_capacity(cpu);
+
+	if (!cap)
+		cap = 1;
 	cluster_tl = DEFAULT_TARGET_LOAD;
 	if (lg_policy->tunables) {
 		cluster_tl = lg_policy->tunables->target_loads;
 	}
+	if (lg_policy->target_load_base)
+		cluster_tl = lg_policy->target_load_base;
+	window_ns = lse_get_policy_window_ns(lg_policy);
+	agg_util = (unsigned int)min_t(u64,
+		div64_u64(prev_runnable_sum << SCHED_CAPACITY_SHIFT, max_t(unsigned int, window_ns, 1U)),
+		SCHED_CAPACITY_SCALE);
+	agg_util = lse_norm_util_to_cpu(cpu, agg_util);
+	cluster_tl = lse_dynamic_target_load(lg_policy, agg_util);
+	lg_policy->last_target_load_dyn = cluster_tl;
+	lg_policy->last_agg_util = agg_util;
 
-	window_size_tl = mult_frac(lse_sched_ravg_window, cluster_tl, 100);
-	divisor = DIV64_U64_ROUNDUP(window_size_tl * arch_scale_cpu_capacity(cpu), freq);
-	next_f = DIV64_U64_ROUNDUP(prev_runnable_sum << SCHED_CAPACITY_SHIFT, divisor);
+	if (gov_legacy_formula_enable) {
+		unsigned int window_size_tl;
+		u64 divisor;
 
+		window_size_tl = mult_frac(lse_sched_ravg_window, cluster_tl, 100);
+		divisor = DIV64_U64_ROUNDUP(window_size_tl * cap, freq);
+		next_f = DIV64_U64_ROUNDUP(prev_runnable_sum << SCHED_CAPACITY_SHIFT, divisor);
+		return next_f;
+	}
+
+	scaled_freq = div64_u64((u64)freq * agg_util, max_t(unsigned int, cluster_tl, 1U));
+	next_f = (unsigned int)scaled_freq;
+	if (!next_f)
+		next_f = policy->cpuinfo.min_freq;
 	if (cpufreq_gov_debug() & DEBUG_FTRACE)
-		gov_trace_printk("cluster[%d] max_freq[%d] win_tl[%d] cpu_cap[%lu] divisor[%llu] next_f[%d]\n",
-			cpu, freq, window_size_tl, arch_scale_cpu_capacity(cpu), divisor, next_f);
+		gov_trace_printk("cluster[%d] max_freq[%d] win_ns[%u] tl[%u] util[%u] next_f[%d]\n",
+			cpu, freq, window_ns, cluster_tl, agg_util, next_f);
 	return next_f;
 }
 
@@ -145,6 +297,15 @@ static unsigned int soft_freq_clamp(struct lse_gov_policy *lg_policy, unsigned i
 	if (soft_freq_max >= 0 && soft_freq_max < target_freq) {
 		target_freq = soft_freq_max;
 	}
+	if (cluster_freq_cap_enable) {
+		if (lg_policy->cluster_freq_cap_max &&
+		    target_freq > lg_policy->cluster_freq_cap_max)
+			target_freq = lg_policy->cluster_freq_cap_max;
+		if (lg_policy->cluster_freq_cap_min &&
+		    target_freq < lg_policy->cluster_freq_cap_min)
+			target_freq = lg_policy->cluster_freq_cap_min;
+	}
+	lg_policy->last_freq_cap_applied = target_freq;
 
 	if (cpufreq_gov_debug() & DEBUG_FTRACE)
 		gov_trace_printk("cluster[%d] max_freq[%d] min_freq[%d] freq[%d]\n",
@@ -420,11 +581,27 @@ static void lsegov_update_freq(struct update_util_data *cb, u64 time, unsigned i
 			if (gov_flag[cluster->id] == 0)
 				continue;
 			cpumask_and(&cluster_online_cpus, &cluster->cpus, cpu_online_mask);
-			for_each_cpu(cpu, &cluster_online_cpus) {
-				lrq = &per_cpu(lse_rq, cpu);
-				if (cpufreq_gov_debug() & DEBUG_FTRACE)
-					gov_trace_printk("cpu[%d] prev_runnable_sum[%llu]\n", cpu, lrq->prev_runnable_sum);
-				prev_runnable_sum = max(prev_runnable_sum, lrq->prev_runnable_sum);
+			if (cluster_agg_mode == LSE_AGG_TOP2_AVG) {
+				unsigned int agg_util = lse_top2_avg_util(&cluster_online_cpus);
+				struct cpufreq_policy *tmp_policy;
+				unsigned int window_ns = lse_sched_ravg_window;
+				struct lse_gov_policy *tmp_lg;
+
+				tmp_policy = cpufreq_cpu_get_raw(cpumask_first(&cluster_online_cpus));
+				if (tmp_policy && tmp_policy->governor_data) {
+					tmp_lg = tmp_policy->governor_data;
+					window_ns = lse_get_policy_window_ns(tmp_lg);
+				}
+				prev_runnable_sum = div64_u64((u64)agg_util * window_ns,
+							      SCHED_CAPACITY_SCALE);
+			} else {
+				for_each_cpu(cpu, &cluster_online_cpus) {
+					lrq = &per_cpu(lse_rq, cpu);
+					if (cpufreq_gov_debug() & DEBUG_FTRACE)
+						gov_trace_printk("cpu[%d] prev_runnable_sum[%llu]\n",
+								 cpu, lrq->prev_runnable_sum);
+					prev_runnable_sum = max(prev_runnable_sum, lrq->prev_runnable_sum);
+				}
 			}
 
 			policy = cpufreq_cpu_get_raw(cpumask_first(&cluster_online_cpus));
@@ -660,6 +837,23 @@ static int lse_gov_start(struct cpufreq_policy *policy)
     cluster_id = topology_physical_package_id(cpu);
 #endif
 	lse_gov_debug("start cluster[%d] cluster_id[%d] gov\n", cpu, cluster_id);
+	lg_policy->cluster_id = cluster_id;
+	lg_policy->target_load_base = DEFAULT_TARGET_LOAD;
+	lg_policy->target_load_min = 70;
+	lg_policy->target_load_max = 95;
+	lg_policy->target_load_step = 2;
+	lg_policy->cluster_window_ns = lse_sched_ravg_window;
+	lg_policy->cluster_freq_cap_max = policy->cpuinfo.max_freq;
+	lg_policy->cluster_freq_cap_min = policy->cpuinfo.min_freq;
+	if (cluster_id >= 0 && cluster_id < MAX_LSE_CLUSTERS) {
+		lse_cluster_cfg[cluster_id].target_load_base = lg_policy->target_load_base;
+		lse_cluster_cfg[cluster_id].target_load_min = lg_policy->target_load_min;
+		lse_cluster_cfg[cluster_id].target_load_max = lg_policy->target_load_max;
+		lse_cluster_cfg[cluster_id].target_load_step = lg_policy->target_load_step;
+		lse_cluster_cfg[cluster_id].window_ns = lg_policy->cluster_window_ns;
+		lse_cluster_cfg[cluster_id].freq_cap_max = lg_policy->cluster_freq_cap_max;
+		lse_cluster_cfg[cluster_id].freq_cap_min = lg_policy->cluster_freq_cap_min;
+	}
 
 	/*
 	 * Some kernel branches (e.g. android12-5.10) don't expose
@@ -760,4 +954,59 @@ int lse_cpufreq_init(void)
 			num_possible_cpus());
 
 	return ret;
+}
+
+static struct lse_gov_policy *lse_gov_policy_from_cpu(int cpu)
+{
+	struct lse_gov_cpu *lg_cpu;
+
+	if (cpu < 0 || cpu >= nr_cpu_ids)
+		return NULL;
+	lg_cpu = &per_cpu(lse_gov_cpu, cpu);
+	return lg_cpu->lg_policy;
+}
+
+unsigned int lse_gov_cluster_window_ns(int cpu)
+{
+	struct lse_gov_policy *lg = lse_gov_policy_from_cpu(cpu);
+
+	if (!lg)
+		return lse_sched_ravg_window;
+	return lg->cluster_window_ns;
+}
+
+unsigned int lse_gov_cluster_target_load_dyn(int cpu)
+{
+	struct lse_gov_policy *lg = lse_gov_policy_from_cpu(cpu);
+
+	if (!lg)
+		return DEFAULT_TARGET_LOAD;
+	return lg->last_target_load_dyn ? lg->last_target_load_dyn : lg->target_load_base;
+}
+
+unsigned int lse_gov_cluster_agg_util(int cpu)
+{
+	struct lse_gov_policy *lg = lse_gov_policy_from_cpu(cpu);
+
+	if (!lg)
+		return 0;
+	return lg->last_agg_util;
+}
+
+unsigned int lse_gov_cluster_freq_cap_applied(int cpu)
+{
+	struct lse_gov_policy *lg = lse_gov_policy_from_cpu(cpu);
+
+	if (!lg)
+		return 0;
+	return lg->last_freq_cap_applied;
+}
+
+unsigned int lse_gov_cluster_power_pressure(int cpu)
+{
+	struct lse_gov_policy *lg = lse_gov_policy_from_cpu(cpu);
+
+	if (!lg)
+		return 0;
+	return lg->last_power_pressure;
 }
