@@ -109,8 +109,8 @@ static void lse_schedule(void *unused, struct task_struct *prev, struct task_str
 
 void lse_tick_entry(void *unused, struct rq *rq)
 {
-	(void)unused;
 	struct lse_task_struct *curr_lts;
+	(void)unused;
 
 	if (!slim_walt_ctrl)
 		return;

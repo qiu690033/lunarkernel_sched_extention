@@ -22,7 +22,7 @@ int heartbeat;
 int heartbeat_enable;
 int watchdog_enable;
 
-static unsigned long lse_watchdog_timeout = msecs_to_jiffies(LSE_WATCHDOG_TIMEOUT_MS);
+static unsigned long lse_watchdog_timeout;
 static unsigned long lse_watchdog_timestamp = INITIAL_JIFFIES;
 static unsigned long lse_heartbeat_last_touch;
 
@@ -315,6 +315,8 @@ void lse_monitor_init(void)
 	if (lse_monitor_inited)
 		return;
 
+	WRITE_ONCE(lse_watchdog_timeout,
+		   msecs_to_jiffies(LSE_WATCHDOG_TIMEOUT_MS));
 	timer_setup(&lse_heartbeat_timer, lse_heartbeat_timer_fn, 0);
 	INIT_DELAYED_WORK(&lse_watchdog_work, lse_watchdog_workfn);
 	WRITE_ONCE(lse_heartbeat_last_touch, jiffies);
