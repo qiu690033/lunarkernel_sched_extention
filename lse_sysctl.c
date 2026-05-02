@@ -154,6 +154,49 @@ static int lse_proc_dsq_toggle_update(LSE_CTL_TABLE_ARG *table,
 	return ret;
 }
 
+static int lse_proc_dsq_dump(LSE_CTL_TABLE_ARG *table,
+				int write, void __user *buffer, size_t *lenp,
+				loff_t *ppos)
+{
+	int ret;
+	int val = 0;
+	struct ctl_table tmp = {
+		.data	= &val,
+		.maxlen	= sizeof(val),
+		.mode	= table->mode,
+	};
+
+	if (write) {
+		ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
+		if (!ret)
+			lse_dsq_dump_state();
+		return ret;
+	}
+	/* Read: return total backlog */
+	val = lse_dsq_total_backlog();
+	return proc_dointvec(&tmp, write, buffer, lenp, ppos);
+}
+
+static int lse_proc_dsq_urgency(LSE_CTL_TABLE_ARG *table,
+				int write, void __user *buffer, size_t *lenp,
+				loff_t *ppos)
+{
+	int ret;
+	unsigned int val;
+	struct ctl_table tmp = {
+		.data	= &val,
+		.maxlen	= sizeof(val),
+		.mode	= table->mode,
+	};
+
+	if (write)
+		return -EPERM;
+
+	val = lse_dsq_urgency_signal(raw_smp_processor_id());
+	ret = proc_douintvec(&tmp, write, buffer, lenp, ppos);
+	return ret;
+}
+
 struct ctl_table lse_table[] = {
     {
         .procname     = "slim_walt_ctrl",
@@ -345,6 +388,27 @@ struct ctl_table lse_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &lse_bool_minval,
 		.extra2		= &lse_bool_maxval,
+	},
+	{
+		.procname	= "dsq_backlog",
+		.data		= SYSCTL_ZERO,
+		.maxlen		= sizeof(int),
+		.mode		= 0444,
+		.proc_handler	= lse_proc_dsq_dump,
+	},
+	{
+		.procname	= "dsq_urgency",
+		.data		= SYSCTL_ZERO,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0444,
+		.proc_handler	= lse_proc_dsq_urgency,
+	},
+	{
+		.procname	= "dsq_dump",
+		.data		= SYSCTL_ZERO,
+		.maxlen		= sizeof(int),
+		.mode		= 0200,
+		.proc_handler	= lse_proc_dsq_dump,
 	},
     { },
 };

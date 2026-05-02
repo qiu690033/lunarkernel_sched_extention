@@ -30,6 +30,8 @@
 #include <linux/timer.h>
 #include <trace/hooks/sched.h>
 
+#include "lse_dsq.h"
+
 #if __has_include(<../kernel/sched/sched.h>)
 #include <../kernel/sched/sched.h>
 #elif __has_include(<kernel/sched/sched.h>)
@@ -235,6 +237,9 @@ extern void lse_dsq_sync(void);
 extern void lse_dsq_on_schedule(struct rq *rq, struct task_struct *prev,
 				struct task_struct *next);
 extern int lse_dsq_depth_cpu(int cpu);
+extern void lse_dsq_add_runtime(struct task_struct *p, unsigned long exec_ns);
+extern unsigned int lse_dsq_urgency_signal(int cpu);
+extern void lse_dsq_dump_state(void);
 
 /*util = runtime * 1024 / window_size */
 static inline u64 lse_scale_time_to_util(u64 d)
