@@ -20,14 +20,14 @@
 #include "lse_main.h"
 #include "lse_dsq.h"
 
-/* is_migration_disabled() not available before 5.15 */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+/* is_migration_disabled() / p->migration_disabled not available before 5.15; fall back to nr_cpus_allowed check only */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#define lse_is_migration_disabled(p) is_migration_disabled(p)
+#else
 static inline bool lse_is_migration_disabled(struct task_struct *p)
 {
-	return p->migration_disabled;
+	return false;
 }
-#else
-#define lse_is_migration_disabled(p) is_migration_disabled(p)
 #endif
 
 /* ===================== Module parameters ===================== */
@@ -42,7 +42,7 @@ u32 lse_dsq_deadlines[LSE_MAX_GLOBAL_DSQS] = LSE_DSQ_DEFAULT_DEADLINES;
 u32 lse_pcp_dsq_deadline_ms = LSE_PCP_DSQ_DEADLINE_MS;
 
 static unsigned long dsq_quota_ns[LSE_MAX_GLOBAL_DSQS] = LSE_DSQ_DEFAULT_QUOTAS;
-static unsigned long pcp_dsq_quota_ns = LSE_PCP_DSQ_QUOTA_NS;
+static unsigned long pcp_dsq_quota_ns __maybe_unused = LSE_PCP_DSQ_QUOTA_NS;
 
 /* ===================== Global DSQ state ======================= */
 
@@ -73,7 +73,7 @@ static inline bool dsq_is_global(struct lse_dispatch_q *dsq)
 	return dsq >= lse_gdsqs && dsq < &lse_gdsqs[LSE_MAX_GLOBAL_DSQS];
 }
 
-static int dsq_global_idx(struct lse_dispatch_q *dsq)
+static int __maybe_unused dsq_global_idx(struct lse_dispatch_q *dsq)
 {
 	if (dsq_is_global(dsq))
 		return (int)(dsq - lse_gdsqs);
@@ -88,7 +88,7 @@ static bool dsq_idx_valid(int idx)
 
 /* ===================== Cluster type for a CPU ================= */
 
-static enum lse_cluster_type lse_cpu_cluster_type(int cpu)
+static enum lse_cluster_type __maybe_unused lse_cpu_cluster_type(int cpu)
 {
 	struct lse_sched_cluster *cluster;
 	int first_cpu;
