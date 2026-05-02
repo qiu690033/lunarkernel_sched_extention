@@ -20,6 +20,16 @@
 #include "lse_main.h"
 #include "lse_dsq.h"
 
+/* is_migration_disabled() not available before 5.15 */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+static inline bool lse_is_migration_disabled(struct task_struct *p)
+{
+	return p->migration_disabled;
+}
+#else
+#define lse_is_migration_disabled(p) is_migration_disabled(p)
+#endif
+
 /* ===================== Module parameters ===================== */
 
 int lse_dsq_enable = 1;
@@ -109,7 +119,7 @@ int lse_dsq_classify_task(struct task_struct *p)
 		return LSE_DSQ_PRIO_BACKGROUND;
 
 	/* Per-CPU pinned tasks → own PCP DSQ */
-	if (p->nr_cpus_allowed == 1 || is_migration_disabled(p))
+	if (p->nr_cpus_allowed == 1 || lse_is_migration_disabled(p))
 		return LSE_DSQ_PCP_BASE + cpumask_any(p->cpus_ptr);
 
 	/* DL tasks are critical system */
@@ -155,7 +165,7 @@ bool lse_dsq_is_pcp_candidate(struct task_struct *p)
 {
 	if (!p)
 		return false;
-	return (p->nr_cpus_allowed == 1 || is_migration_disabled(p));
+	return (p->nr_cpus_allowed == 1 || lse_is_migration_disabled(p));
 }
 
 /* ===================== DSQ enqueue / dequeue ================== */
@@ -266,7 +276,6 @@ void lse_dsq_dequeue_task(struct task_struct *p, int cpu)
 void lse_dsq_add_runtime(struct task_struct *p, unsigned long exec_ns)
 {
 	int idx;
-	int cpu = task_cpu(p);
 
 	if (!READ_ONCE(lse_dsq_enable) || !p)
 		return;
@@ -294,7 +303,6 @@ void lse_dsq_add_runtime(struct task_struct *p, unsigned long exec_ns)
 void lse_dsq_scan_timeout(int cpu)
 {
 	struct lse_dispatch_q *dsq;
-	struct lse_task_struct *lts;
 	unsigned long flags;
 	int i;
 	u64 deadline_ms;
