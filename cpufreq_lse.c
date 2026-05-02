@@ -42,7 +42,7 @@ do {										\
 #define DEFAULT_TARGET_LOAD 90
 
 static int gov_flag[MAX_LSE_CLUSTERS] = {0};
-int util_norm_enable = 1;
+int util_norm_enable;
 int cluster_window_enable = 1;
 int cluster_tl_dyn_enable = 1;
 int cluster_freq_cap_enable = 1;
@@ -128,23 +128,6 @@ static unsigned int lse_get_policy_window_ns(struct lse_gov_policy *lg_policy)
 	return lg_policy->cluster_window_ns;
 }
 
-static unsigned int lse_norm_util_to_cpu(int cpu, u64 util)
-{
-	unsigned long cap;
-	u64 scaled = util;
-
-	if (!util_norm_enable)
-		return (unsigned int)min_t(u64, util, SCHED_CAPACITY_SCALE);
-
-	cap = arch_scale_cpu_capacity(cpu);
-	if (!cap)
-		cap = 1;
-	scaled = div64_u64((u64)util * SCHED_CAPACITY_SCALE, cap);
-	if (scaled > SCHED_CAPACITY_SCALE)
-		scaled = SCHED_CAPACITY_SCALE;
-	return (unsigned int)scaled;
-}
-
 static unsigned int lse_top2_avg_util(struct cpumask *mask)
 {
 	unsigned int top1 = 0, top2 = 0, util;
@@ -161,7 +144,10 @@ static unsigned int lse_top2_avg_util(struct cpumask *mask)
 		util = (unsigned int)min_t(u64,
 			div64_u64(lrq->prev_runnable_sum << SCHED_CAPACITY_SHIFT, win_ns),
 			SCHED_CAPACITY_SCALE);
-		util = lse_norm_util_to_cpu(cpu, util);
+		/*
+		 * lrq->prev_runnable_sum is already frequency/capacity scaled by
+		 * update_task_rq_cpu_cycles(), so avoid double normalization here.
+		 */
 		if (util >= top1) {
 			top2 = top1;
 			top1 = util;
@@ -260,7 +246,10 @@ static unsigned int get_next_freq(struct lse_gov_policy *lg_policy, u64 prev_run
 	agg_util = (unsigned int)min_t(u64,
 		div64_u64(prev_runnable_sum << SCHED_CAPACITY_SHIFT, max_t(unsigned int, window_ns, 1U)),
 		SCHED_CAPACITY_SCALE);
-	agg_util = lse_norm_util_to_cpu(cpu, agg_util);
+	/*
+	 * prev_runnable_sum has already been scaled in WALT accounting path.
+	 * Re-normalizing by cpu capacity over-amplifies little cores at low load.
+	 */
 	cluster_tl = lse_dynamic_target_load(lg_policy, agg_util);
 	lg_policy->last_target_load_dyn = cluster_tl;
 	lg_policy->last_agg_util = agg_util;
