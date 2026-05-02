@@ -278,6 +278,7 @@ extern int cluster_tl_dyn_enable;
 extern int cluster_freq_cap_enable;
 extern int cluster_agg_mode;
 extern int gov_legacy_formula_enable;
+extern void lse_gov_tick_update(struct rq *rq);
 extern void run_lse_irq_work_rollover(void);
 extern int lse_cpufreq_init(void);
 extern unsigned int lse_gov_cluster_window_ns(int cpu);

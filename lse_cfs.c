@@ -120,6 +120,9 @@ void lse_tick_entry(void *unused, struct rq *rq)
 	curr_lts = get_lse_task_struct(rq->curr);
 	if (curr_lts)
 		lse_update_task_ravg(curr_lts, rq->curr, rq, TASK_UPDATE, lse_rq_clock(rq));
+
+	/* tick-level cpufreq: replaces WALT governor's per-tick update */
+	lse_gov_tick_update(rq);
 }
 
 void lse_cfs_hooks_register(void)

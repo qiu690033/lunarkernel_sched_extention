@@ -20,8 +20,20 @@
 
 #include "lse_main.h"
 
+/* ── governor-level parms ── */
 unsigned int sysctl_lse_gov_debug;
 static int cpufreq_gov_debug(void) {return sysctl_lse_gov_debug;}
+
+/* Rate-limit: min interval between tick-driven freq updates per policy (ns) */
+#define LSE_GOV_RATE_LIMIT_NS  400000UL  /* 400us ≈ 2-3 ticks at 250Hz */
+
+struct lse_gov_rq {      /* per-rq gov tracking */
+    u64  last_tick_ns;   /* last tick-update timestamp (monotonic ns) */
+    u64  curr_util;      /* cached util from last tick */
+    u64  cached_this_sum;/* cached curr_runnable_sum of this CPU */
+    unsigned int cached_agg_util; /* cached cluster agg util */
+};
+static DEFINE_PER_CPU(struct lse_gov_rq, lse_gov_rq_data);
 
 /*debug level for lse_gov*/
 #define DEBUG_SYSTRACE (1 << 0)
@@ -197,6 +209,143 @@ static unsigned int lse_dynamic_target_load(struct lse_gov_policy *lg_policy,
 
 	lg_policy->last_power_pressure = pressure;
 	return clamp_t(unsigned int, tl, lg_policy->target_load_min, lg_policy->target_load_max);
+}
+
+/* ──── tick-level cluster util (cached-incremental, avoids full traversal) ──── */
+#define UTIL_CACHE_STALE_NS  8000000ULL   /* 8ms — force full recal after one window */
+
+static unsigned int lse_gov_cluster_curr_util(struct cpufreq_policy *policy, int this_cpu)
+{
+	struct lse_gov_rq *grq = &per_cpu(lse_gov_rq_data, this_cpu);
+	struct lse_rq *lrq = &per_cpu(lse_rq, this_cpu);
+	u64 this_sum = lrq->curr_runnable_sum;
+	u64 now = local_clock();
+
+	/*
+	 * Incremental path: if this CPU's sum barely changed since last tick
+	 * and the cache isn't stale, reuse cached cluster util.
+	 */
+	if (grq->cached_agg_util && grq->cached_this_sum &&
+	    (now - grq->last_tick_ns < UTIL_CACHE_STALE_NS)) {
+		u64 diff = this_sum > grq->cached_this_sum
+			   ? this_sum - grq->cached_this_sum
+			   : grq->cached_this_sum - this_sum;
+
+		/* less than 5% change — ignore, reuse cache */
+		if (diff * 20 < grq->cached_this_sum) {
+			grq->cached_this_sum = this_sum;
+			return grq->cached_agg_util;
+		}
+	}
+
+	/* Full traversal: this CPU changed significantly or cache is stale */
+	{
+		u64 max_sum = 0, sum;
+		int cpu;
+
+		if (cluster_agg_mode == LSE_AGG_TOP2_AVG) {
+			u64 top1 = 0, top2 = 0;
+			for_each_cpu(cpu, policy->cpus) {
+				lrq = &per_cpu(lse_rq, cpu);
+				sum = lrq->curr_runnable_sum;
+				if (sum >= top1)  { top2 = top1; top1 = sum; }
+				else if (sum > top2) top2 = sum;
+			}
+			max_sum = (top1 + top2) / 2;
+		} else {
+			for_each_cpu(cpu, policy->cpus) {
+				lrq = &per_cpu(lse_rq, cpu);
+				sum = lrq->curr_runnable_sum;
+				if (sum > max_sum) max_sum = sum;
+			}
+		}
+
+		grq->cached_this_sum = per_cpu(lse_rq, this_cpu).curr_runnable_sum;
+		grq->cached_agg_util = (unsigned int)min_t(u64,
+			div64_u64(max_sum << SCHED_CAPACITY_SHIFT,
+				  max_t(unsigned int, lse_sched_ravg_window, 1U)),
+			SCHED_CAPACITY_SCALE);
+		return grq->cached_agg_util;
+	}
+}
+
+/**
+ * lse_gov_tick_update — tick-level frequency update entry (called from scheduler tick)
+ * @rq:  runqueue of the current CPU
+ *
+ * Computes cluster util from curr_runnable_sum (real-time, not prev-window),
+ * integrates DSQ urgency as a boost factor, and applies rate-limiting to
+ * avoid excessive updates.
+ */
+void lse_gov_tick_update(struct rq *rq)
+{
+	struct cpufreq_policy *policy;
+	struct lse_gov_policy *lg_policy;
+	struct lse_gov_rq *grq;
+	unsigned int agg_util, cluster_tl, next_f, dsq_boost;
+	u64 now_ns, scaled_freq;
+	unsigned long irq_flags;
+	int cpu = cpu_of(rq);
+
+	policy = cpufreq_cpu_get(cpu);
+	if (!policy || !policy->governor_data) {
+		if (policy) cpufreq_cpu_put(policy);
+		return;
+	}
+	lg_policy = policy->governor_data;
+
+	/* ── rate-limit ── */
+	grq = &per_cpu(lse_gov_rq_data, cpu);
+	now_ns = local_clock();
+	if (now_ns - grq->last_tick_ns < LSE_GOV_RATE_LIMIT_NS) {
+		cpufreq_cpu_put(policy);
+		return;
+	}
+	grq->last_tick_ns = now_ns;
+
+	/* ── compute util from live curr_runnable_sum (incremental cache) ── */
+	agg_util = lse_gov_cluster_curr_util(policy, cpu);
+	grq->curr_util = agg_util;
+
+	/* ── DSQ urgency boost (0-1024 → 1.0×-2.0×) ── */
+	dsq_boost = lse_dsq_urgency_signal(cpu);
+	agg_util = min_t(unsigned int, agg_util * (1024 + dsq_boost) / 1024,
+			 SCHED_CAPACITY_SCALE);
+
+	/* ── dynamic target_load ── */
+	cluster_tl = lg_policy->target_load_base ? lg_policy->target_load_base
+						 : DEFAULT_TARGET_LOAD;
+	cluster_tl = clamp_t(unsigned int, cluster_tl,
+			     lg_policy->target_load_min,
+			     lg_policy->target_load_max);
+	if (cluster_tl_dyn_enable)
+		cluster_tl = lse_dynamic_target_load(lg_policy, agg_util);
+
+	/* ── next_freq = cur × agg_util / target_load ── */
+	scaled_freq = div64_u64((u64)policy->cur * agg_util,
+				max_t(unsigned int, cluster_tl, 1U));
+	next_f = (unsigned int)scaled_freq;
+	if (!next_f) next_f = policy->cpuinfo.min_freq;
+
+	next_f = soft_freq_clamp(lg_policy, next_f);
+	next_f = cpufreq_driver_resolve_freq(policy, next_f);
+
+	raw_spin_lock_irqsave(&lg_policy->update_lock, irq_flags);
+	lg_policy->last_agg_util = agg_util;
+	lg_policy->last_target_load_dyn = cluster_tl;
+	if (lg_policy->next_freq == next_f) {
+		raw_spin_unlock_irqrestore(&lg_policy->update_lock, irq_flags);
+		cpufreq_cpu_put(policy);
+		return;
+	}
+	lg_policy->next_freq = next_f;
+	if (policy->fast_switch_enabled)
+		cpufreq_driver_fast_switch(policy, next_f);
+	else
+		kthread_queue_work(&lg_policy->worker, &lg_policy->work);
+	raw_spin_unlock_irqrestore(&lg_policy->update_lock, irq_flags);
+
+	cpufreq_cpu_put(policy);
 }
 
 static void lse_gov_work(struct kthread_work *work)

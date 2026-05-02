@@ -438,6 +438,9 @@ unsigned int lse_dsq_urgency_signal(int cpu)
 	return clamp(urgency, 0U, 1024U);
 }
 
+/* Throttle timeout scan to once per ~4ms per CPU */
+static DEFINE_PER_CPU(unsigned long, lse_dsq_last_scan_jf);
+
 /* ===================== Schedule-hook integration =============== */
 
 void lse_dsq_on_schedule(struct rq *rq, struct task_struct *prev,
@@ -465,8 +468,11 @@ void lse_dsq_on_schedule(struct rq *rq, struct task_struct *prev,
 			lse_dsq_dequeue_task(next, cpu);
 	}
 
-	/* Periodic timeout scan (throttled per call, cheap under lock) */
-	lse_dsq_scan_timeout(cpu);
+	/* Timeout scan — throttled to ~once per 4ms per CPU */
+	if (time_after_eq(jiffies, per_cpu(lse_dsq_last_scan_jf, cpu) + 4)) {
+		per_cpu(lse_dsq_last_scan_jf, cpu) = jiffies;
+		lse_dsq_scan_timeout(cpu);
+	}
 }
 
 /* ===================== DSQ cleanup / init ===================== */
