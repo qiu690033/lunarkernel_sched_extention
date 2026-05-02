@@ -224,11 +224,12 @@ static void lse_gov_work(struct kthread_work *work)
 	mutex_unlock(&lg_policy->work_lock);
 }
 
-/* next_freq = (max_freq * scale_time* 100)/(window_size * TL * arch_scale_cpu_capacity) */
+/* next_freq = cur × agg_util / target_load — uses current freq as base for smooth scaling */
 static unsigned int get_next_freq(struct lse_gov_policy *lg_policy, u64 prev_runnable_sum)
 {
 	struct cpufreq_policy *policy = lg_policy->policy;
-	unsigned int freq = policy->cpuinfo.max_freq, next_f;
+	unsigned int freq = policy->cur ? policy->cur : policy->cpuinfo.min_freq;
+	unsigned int next_f;
 	unsigned int cluster_tl, window_ns, agg_util;
 	u64 scaled_freq;
 	int cpu = cpumask_first(policy->cpus);
@@ -269,8 +270,9 @@ static unsigned int get_next_freq(struct lse_gov_policy *lg_policy, u64 prev_run
 	if (!next_f)
 		next_f = policy->cpuinfo.min_freq;
 	if (cpufreq_gov_debug() & DEBUG_FTRACE)
-		gov_trace_printk("cluster[%d] max_freq[%d] win_ns[%u] tl[%u] util[%u] next_f[%d]\n",
-			cpu, freq, window_ns, cluster_tl, agg_util, next_f);
+		gov_trace_printk("cluster[%d] cur[%d] max[%d] win_ns[%u] tl[%u] util[%u] next_f[%d]\n",
+			cpu, freq, policy->cpuinfo.max_freq,
+			window_ns, cluster_tl, agg_util, next_f);
 	return next_f;
 }
 
