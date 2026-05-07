@@ -212,6 +212,15 @@ static unsigned int lse_dynamic_target_load(struct lse_gov_policy *lg_policy,
 }
 
 /* ──── tick-level cluster util (cached-incremental, avoids full traversal) ──── */
+
+/* Forward decls — defined later in this file */
+static unsigned int lse_compute_power_pressure(struct lse_gov_policy *lg_policy,
+					       unsigned int agg_util);
+static unsigned int lse_dynamic_target_load(struct lse_gov_policy *lg_policy,
+					    unsigned int agg_util);
+static unsigned int soft_freq_clamp(struct lse_gov_policy *lg_policy,
+				    unsigned int target_freq);
+
 #define UTIL_CACHE_STALE_NS  8000000ULL   /* 8ms — force full recal after one window */
 
 static unsigned int lse_gov_cluster_curr_util(struct cpufreq_policy *policy, int this_cpu)
@@ -268,6 +277,8 @@ static unsigned int lse_gov_cluster_curr_util(struct cpufreq_policy *policy, int
 		return grq->cached_agg_util;
 	}
 }
+
+static unsigned int soft_freq_clamp(struct lse_gov_policy *lg_policy, unsigned int target_freq);
 
 /**
  * lse_gov_tick_update — tick-level frequency update entry (called from scheduler tick)
