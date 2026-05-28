@@ -182,7 +182,7 @@ extern struct lse_dsq_sched_info lse_dsq_sinfo;
 /* ──── API ──── */
 
 /* Init / teardown */
-void lse_dsq_init_core(void);
+void lse_dsq_init(void);
 void lse_dsq_sync(void);
 
 /* Task classification → DSQ index */

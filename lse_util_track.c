@@ -647,6 +647,8 @@ void lse_sched_stats_init(void)
 		init_irq_work(&lse_slim_walt_irq_work, lse_irq_work);
 		init_irq_work_inited = true;
 	}
+
+	lse_fixup_window_dep();
 }
 
 void sched_ravg_window_change(int frame_per_sec)
