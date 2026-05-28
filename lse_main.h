@@ -111,7 +111,6 @@ struct lse_task_struct {
 	u8	task_class;
 	u16	boost_pct;
 	u8	priority_hint;
-	u8	_reserved;
 	struct list_head dsq_node;
 	u8	on_dsq;
 } ____cacheline_aligned;

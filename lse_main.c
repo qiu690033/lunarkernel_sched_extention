@@ -71,6 +71,12 @@ static int __init lunar_sched_ext_init(void)
 
 module_init(lunar_sched_ext_init);
 
+static void __exit lunar_sched_ext_exit(void)
+{
+	pr_info("[LSE] Module unloaded\n");
+}
+module_exit(lunar_sched_ext_exit);
+
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Cloud_Yun <1770669041@qq.com>");
 MODULE_DESCRIPTION("LunarKernel Scheduling Extention");

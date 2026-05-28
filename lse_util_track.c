@@ -604,9 +604,13 @@ u16 lse_cpu_util(int cpu)
 {
 	u64 prev_runnable_sum;
 	struct lse_rq *lrq = &per_cpu(lse_rq, cpu);
+	u32 shift;
 
 	prev_runnable_sum = lrq->prev_runnable_sum;
-	do_div(prev_runnable_sum, lrq->prev_window_size >> SCHED_CAPACITY_SHIFT);
+	shift = max_t(u32, lrq->prev_window_size, 1U) >> SCHED_CAPACITY_SHIFT;
+	if (!shift)
+		return 0;
+	do_div(prev_runnable_sum, shift);
 
 	return (u16)prev_runnable_sum;
 }
@@ -642,7 +646,7 @@ void lse_sched_stats_init(void)
 	}
 	sched_window_stats_policy = WINDOW_STATS_MAX_RECENT_AVG;
 
-	if (false == init_irq_work_inited) {
+	if (!init_irq_work_inited) {
 		init_irq_work(&lse_slim_walt_irq_work, lse_irq_work);
 		init_irq_work_inited = true;
 	}
