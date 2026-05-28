@@ -406,36 +406,41 @@ int lse_dsq_depth_cpu(int cpu)
 
 /* ===================== Urgency signal (→ cpufreq) ============= */
 
+/*
+ * Only report urgency when there are actual timeout tasks.
+ * Depth-based boosting (previous approach) systematically inflated
+ * agg_util because DSQ enqueue is a normal scheduling artifact,
+ * not a sign of overload. This caused permanent 20-100% frequency
+ * inflation and massive energy waste.
+ */
 unsigned int lse_dsq_urgency_signal(int cpu)
 {
 	unsigned int urgency = 0;
 	int i;
-	int period_depth = 0;
-	int non_period_depth = 0;
 	int timeouts = 0;
-	int total;
+	int total_backlog = 0;
 
 	if (!READ_ONCE(lse_dsq_enable))
 		return 0;
 
-	for (i = LSE_DSQ_PERIOD_START; i < LSE_DSQ_PERIOD_END; i++)
-		period_depth += lse_dsq_depth_global(i);
-
-	for (i = LSE_DSQ_NON_PERIOD_START; i < LSE_DSQ_NON_PERIOD_END; i++) {
-		non_period_depth += lse_dsq_depth_global(i);
+	/* Count only timeout DSQs — these indicate genuine starvation */
+	for (i = 0; i < LSE_MAX_GLOBAL_DSQS; i++) {
 		if (lse_dsq_has_timeout(i))
 			timeouts++;
+		total_backlog += lse_dsq_depth_global(i);
 	}
+	total_backlog += lse_dsq_depth_pcp(cpu);
 
-	non_period_depth += lse_dsq_depth_pcp(cpu);
+	/*
+	 * Scale urgency conservatively:
+	 *   - 0 timeouts  → 0 boost (no starvation → no need to raise freq)
+	 *   - 1-3 timeouts → up to 768 (75% boost)
+	 *   - 4+ timeouts → up to 1024 (100% boost)
+	 * Each timeout DSQ contributes 256, capped at 1024.
+	 */
+	urgency = min_t(unsigned int, timeouts * 256, 1024U);
 
-	total = period_depth + non_period_depth;
-
-	urgency += min(period_depth * 200, 600);
-	urgency += min(timeouts * 200, 600);
-	urgency += min(total * 40, 400);
-
-	return clamp(urgency, 0U, 1024U);
+	return urgency;
 }
 
 /* Throttle timeout scan to once per ~4ms per CPU */

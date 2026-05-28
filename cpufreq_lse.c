@@ -213,21 +213,21 @@ static unsigned int lse_dynamic_target_load(struct lse_gov_policy *lg_policy,
 
 /* ──── tick-level cluster util (cached-incremental, avoids full traversal) ──── */
 
-/* Forward decls — defined later in this file */
-static unsigned int lse_compute_power_pressure(struct lse_gov_policy *lg_policy,
-					       unsigned int agg_util);
-static unsigned int lse_dynamic_target_load(struct lse_gov_policy *lg_policy,
-					    unsigned int agg_util);
-static unsigned int soft_freq_clamp(struct lse_gov_policy *lg_policy,
-				    unsigned int target_freq);
+/*
+ * Compute cluster utility from prev_runnable_sum (completed-window aggregate).
+ * Using prev (not curr) eliminates intra-window volatility that causes
+ * frequency overshoot → undershoot cycles — a major energy waste pattern.
+ *
+ * Standard WALT + schedutil convention: prev_runnable_sum = stable average,
+ * curr_runnable_sum = in-progress partial (used only for rate-of-change hints).
+ */
+#define UTIL_CACHE_STALE_NS  16000000ULL  /* 16ms — two windows before forced recal */
 
-#define UTIL_CACHE_STALE_NS  8000000ULL   /* 8ms — force full recal after one window */
-
-static unsigned int lse_gov_cluster_curr_util(struct cpufreq_policy *policy, int this_cpu)
+static unsigned int lse_gov_cluster_util(struct cpufreq_policy *policy, int this_cpu)
 {
 	struct lse_gov_rq *grq = &per_cpu(lse_gov_rq_data, this_cpu);
 	struct lse_rq *lrq = &per_cpu(lse_rq, this_cpu);
-	u64 this_sum = lrq->curr_runnable_sum;
+	u64 this_sum = lrq->prev_runnable_sum;
 	u64 now = local_clock();
 
 	/*
@@ -256,7 +256,7 @@ static unsigned int lse_gov_cluster_curr_util(struct cpufreq_policy *policy, int
 			u64 top1 = 0, top2 = 0;
 			for_each_cpu(cpu, policy->cpus) {
 				lrq = &per_cpu(lse_rq, cpu);
-				sum = lrq->curr_runnable_sum;
+				sum = lrq->prev_runnable_sum;
 				if (sum >= top1)  { top2 = top1; top1 = sum; }
 				else if (sum > top2) top2 = sum;
 			}
@@ -264,12 +264,12 @@ static unsigned int lse_gov_cluster_curr_util(struct cpufreq_policy *policy, int
 		} else {
 			for_each_cpu(cpu, policy->cpus) {
 				lrq = &per_cpu(lse_rq, cpu);
-				sum = lrq->curr_runnable_sum;
+				sum = lrq->prev_runnable_sum;
 				if (sum > max_sum) max_sum = sum;
 			}
 		}
 
-		grq->cached_this_sum = per_cpu(lse_rq, this_cpu).curr_runnable_sum;
+		grq->cached_this_sum = this_sum;
 		grq->cached_agg_util = (unsigned int)min_t(u64,
 			div64_u64(max_sum << SCHED_CAPACITY_SHIFT,
 				  max_t(unsigned int, lse_sched_ravg_window, 1U)),
@@ -314,8 +314,8 @@ void lse_gov_tick_update(struct rq *rq)
 	}
 	grq->last_tick_ns = now_ns;
 
-	/* ── compute util from live curr_runnable_sum (incremental cache) ── */
-	agg_util = lse_gov_cluster_curr_util(policy, cpu);
+	/* ── compute util from prev_runnable_sum (stable, completed-window) ── */
+	agg_util = lse_gov_cluster_util(policy, cpu);
 	grq->curr_util = agg_util;
 
 	/* ── DSQ urgency boost (0-1024 → 1.0×-2.0×) ── */

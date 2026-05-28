@@ -62,6 +62,7 @@ static enum hrtimer_restart lse_shadow_tick_cb(struct hrtimer *timer)
 	int cpu = smp_processor_id();
 	struct rq *rq = cpu_rq(cpu);
 	struct rq_flags rf;
+	struct lse_task_struct *curr_lts;
 
 	if (READ_ONCE(highres_tick_ctrl_dbg) && cpu == 0)
 		trace_printk("lse_shadow_tick cpu=%d\n", cpu);
@@ -77,10 +78,21 @@ static enum hrtimer_restart lse_shadow_tick_cb(struct hrtimer *timer)
 	rq_lock(rq, &rf);
 #endif
 	update_rq_clock(rq);
-	if (rq->curr != rq->idle)
-		lse_tick_entry(NULL, rq);
+
+	/*
+	 * Shadow tick does WALT advancement only.
+	 * cpufreq updates are left to the regular scheduler_tick path
+	 * (which fires at HZ rate, e.g. 250Hz). This avoids amplifying
+	 * the cpufreq update rate by ~10x (1ms → 2500Hz) which was a
+	 * massive energy drain.
+	 */
+	curr_lts = get_lse_task_struct(rq->curr);
+	if (curr_lts && rq->curr != rq->idle)
+		lse_update_task_ravg(curr_lts, rq->curr, rq,
+				    TASK_UPDATE, lse_sched_clock());
 	else
 		lse_monitor_touch();
+
 	rq_unlock(rq, &rf);
 
 	hrtimer_forward_now(timer, ns_to_ktime(LSE_SHADOW_TICK_NS));
