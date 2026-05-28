@@ -15,7 +15,6 @@
 #include <linux/cpufreq.h>
 #include <linux/sched.h>
 #include <linux/sched/cputime.h>
-#include <uapi/linux/sched/types.h>
 #include <trace/hooks/sched.h>
 
 #include "lse_main.h"
@@ -766,20 +765,7 @@ static void lsegov_update_freq(struct update_util_data *cb, u64 time, unsigned i
 static int lse_gov_kthread_create(struct lse_gov_policy *lg_policy)
 {
 	struct task_struct *thread;
-	struct sched_attr attr = {
-		.size		= sizeof(struct sched_attr),
-		.sched_policy	= SCHED_DEADLINE,
-		.sched_flags	= SCHED_FLAG_SUGOV,
-		.sched_nice	= 0,
-		.sched_priority	= 0,
-		/*
-		 * Fake (unused) bandwidth; workaround to "fix"
-		 * priority inheritance.
-		 */
-		.sched_runtime	=  1000000,
-		.sched_deadline = 10000000,
-		.sched_period	= 10000000,
-	};
+	struct sched_param param = { .sched_priority = MAX_RT_PRIO - 1 };
 	struct cpufreq_policy *policy = lg_policy->policy;
 	int ret;
 
@@ -797,10 +783,10 @@ static int lse_gov_kthread_create(struct lse_gov_policy *lg_policy)
 		return PTR_ERR(thread);
 	}
 
-	ret = sched_setattr_nocheck(thread, &attr);
+	ret = sched_setscheduler_nocheck(thread, SCHED_FIFO, &param);
 	if (ret) {
 		kthread_stop(thread);
-		pr_warn("%s: failed to set SCHED_DEADLINE\n", __func__);
+		pr_warn("%s: failed to set SCHED_FIFO\n", __func__);
 		return ret;
 	}
 
