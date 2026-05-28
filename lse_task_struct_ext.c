@@ -66,39 +66,25 @@ static void free_lse_task_struct(void *unused, struct task_struct *tsk)
 
 static void alloc_lts_mem_for_all_threads(void)
 {
-	struct task_struct *g, *p, **saved;
-	int count = 0, nr_tasks = 0, i;
+	struct task_struct *p, *g;
+	u32 iter_cpu;
+	struct lse_task_struct *lts;
 
-	/* Phase 1: count tasks under read lock */
+	/*
+	 * Allocate under tasklist_lock read lock with GFP_ATOMIC.
+	 * read_lock on tasklist_lock (rw_semaphore) prevents fork/exit
+	 * during the scan, so collected task_struct pointers remain
+	 * valid. GFP_ATOMIC is used because sleeping is not allowed
+	 * under any rw_semaphore (even read-locked).
+	 */
 	read_lock(&tasklist_lock);
-	for_each_process_thread(g, p)
-		nr_tasks++;
-	for_each_possible_cpu(i)
-		nr_tasks++;
-
-	saved = kmalloc_array(nr_tasks, sizeof(void *), GFP_KERNEL);
-	if (!saved) {
-		read_unlock(&tasklist_lock);
-		return;
-	}
-
 	for_each_process_thread(g, p) {
-		if (!smp_load_acquire(&p->android_vendor_data1[LTS_IDX]))
-			saved[count++] = p;
-	}
-	for_each_possible_cpu(i) {
-		p = cpu_rq(i)->idle;
-		if (!smp_load_acquire(&p->android_vendor_data1[LTS_IDX]))
-			saved[count++] = p;
-	}
-	read_unlock(&tasklist_lock);
+		lts = (struct lse_task_struct *)
+			smp_load_acquire(&p->android_vendor_data1[LTS_IDX]);
+		if (lts)
+			continue;
 
-	/* Phase 2: allocate without holding tasklist_lock */
-	for (i = 0; i < count; i++) {
-		struct lse_task_struct *lts;
-
-		p = saved[i];
-		lts = kmem_cache_alloc(lse_task_struct_cachep, GFP_KERNEL);
+		lts = kmem_cache_alloc(lse_task_struct_cachep, GFP_ATOMIC);
 		if (!lts)
 			continue;
 
@@ -106,7 +92,21 @@ static void alloc_lts_mem_for_all_threads(void)
 		smp_store_release(&p->android_vendor_data1[LTS_IDX], (u64)lts);
 	}
 
-	kfree(saved);
+	for_each_possible_cpu(iter_cpu) {
+		p = cpu_rq(iter_cpu)->idle;
+		lts = (struct lse_task_struct *)
+			smp_load_acquire(&p->android_vendor_data1[LTS_IDX]);
+		if (lts)
+			continue;
+
+		lts = kmem_cache_alloc(lse_task_struct_cachep, GFP_ATOMIC);
+		if (!lts)
+			continue;
+
+		init_lse_task_struct(lts, p);
+		smp_store_release(&p->android_vendor_data1[LTS_IDX], (u64)lts);
+	}
+	read_unlock(&tasklist_lock);
 }
 
 int lse_task_struct_ext_init(void)
