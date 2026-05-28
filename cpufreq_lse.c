@@ -15,6 +15,7 @@
 #include <linux/cpufreq.h>
 #include <linux/sched.h>
 #include <linux/sched/cputime.h>
+#include <linux/sched/types.h>
 #include <trace/hooks/sched.h>
 
 #include "lse_main.h"
