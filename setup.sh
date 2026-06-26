@@ -60,6 +60,22 @@ setup_LSE() {
     # Add entries in Makefile and Kconfig if not already existing
     grep -q "lunarkernel_sched_extention" "$DRIVER_STAGING_MAKEFILE" || printf "\nobj-\$(CONFIG_LUNAR_SCHED_EXT) += lunarkernel_sched_extention/\n" >> "$DRIVER_STAGING_MAKEFILE" && echo "[+] Modified Makefile."
     grep -q "source \"drivers/staging/lunarkernel_sched_extention/Kconfig\"" "$DRIVER_STAGING_KCONFIG" || sed -i "/endif/i\source \"drivers/staging/lunarkernel_sched_extention/Kconfig\"" "$DRIVER_STAGING_KCONFIG" && echo "[+] Modified Kconfig."
+
+    # Add module to Bazel BUILD.bazel module_outs if present (GKI 6.12+ uses Bazel)
+    MODULE_OUT="drivers/staging/lunarkernel_sched_extention/lunar_bsp_ext_sched.ko"
+    for BUILD_BAZEL in "$GKI_ROOT/common/BUILD.bazel" "$GKI_ROOT/BUILD.bazel"; do
+        if [ -f "$BUILD_BAZEL" ] && grep -q "module_outs" "$BUILD_BAZEL"; then
+            if ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
+                sed -i "/module_outs/,/]/{
+                    /]/i\\        \"$MODULE_OUT\",
+                }" "$BUILD_BAZEL" && echo "[+] Modified $BUILD_BAZEL (added module_outs)."
+            else
+                echo "[+] $BUILD_BAZEL already contains module_outs entry."
+            fi
+            break
+        fi
+    done
+
     echo '[+] Done.'
 }
 
