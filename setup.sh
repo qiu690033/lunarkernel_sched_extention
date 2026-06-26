@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 
-GKI_ROOT=$(pwd)
+# Use KERNEL_ROOT from ABK environment if available, otherwise fall back to pwd
+GKI_ROOT="${KERNEL_ROOT:-$(pwd)}"
+LSE_MODULE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 display_usage() {
     echo "Usage: $0 [--cleanup | <commit-or-tag>]"
@@ -38,10 +40,22 @@ perform_cleanup() {
 # Sets up or update lunarkernel_sched_extention environment
 setup_LSE() {
     echo "[+] Setting up lunarkernel_sched_extention..."
-    test -d "$GKI_ROOT/lunarkernel_sched_extention" || git clone https://github.com/LunarKernel-Dev/lunarkernel_sched_extention && echo "[+] Repository cloned."
-    cd "$GKI_ROOT/lunarkernel_sched_extention"
+    echo "[+] Kernel root: $GKI_ROOT"
+    echo "[+] Module dir: $LSE_MODULE_DIR"
+
+    # In ABK context, the module is already cloned. Skip re-cloning.
+    if [ -f "$LSE_MODULE_DIR/Kconfig" ] && [ -f "$LSE_MODULE_DIR/Makefile" ]; then
+        echo "[+] Using existing module directory."
+    elif [ -d "$GKI_ROOT/lunarkernel_sched_extention" ]; then
+        echo "[+] Using existing clone in kernel root."
+        LSE_MODULE_DIR="$GKI_ROOT/lunarkernel_sched_extention"
+    else
+        git clone https://github.com/qiu690033/lunarkernel_sched_extention "$GKI_ROOT/lunarkernel_sched_extention" && echo "[+] Repository cloned."
+        LSE_MODULE_DIR="$GKI_ROOT/lunarkernel_sched_extention"
+    fi
+
     cd "$DRIVER_STAGING_DIR"
-    ln -sf "$(realpath --relative-to="$DRIVER_STAGING_DIR" "$GKI_ROOT/lunarkernel_sched_extention")" "lunarkernel_sched_extention" && echo "[+] Symlink created."
+    ln -sf "$(realpath --relative-to="$DRIVER_STAGING_DIR" "$LSE_MODULE_DIR")" "lunarkernel_sched_extention" && echo "[+] Symlink created."
 
     # Add entries in Makefile and Kconfig if not already existing
     grep -q "lunarkernel_sched_extention" "$DRIVER_STAGING_MAKEFILE" || printf "\nobj-\$(CONFIG_LUNAR_SCHED_EXT) += lunarkernel_sched_extention/\n" >> "$DRIVER_STAGING_MAKEFILE" && echo "[+] Modified Makefile."
