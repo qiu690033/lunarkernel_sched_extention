@@ -67,60 +67,30 @@ setup_LSE() {
         if [ -f "$BUILD_BAZEL" ] && grep -q "module_outs" "$BUILD_BAZEL"; then
             if ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
                 echo "[+] Adding module_outs entry to $BUILD_BAZEL"
-                python3 - "$BUILD_BAZEL" "$MODULE_OUT" <<'PYEOF'
+                python3 -c "
 import sys
-
-bazel_path = sys.argv[1]
-module_out = sys.argv[2]
-
-with open(bazel_path, 'r') as f:
+bazel_file = '$BUILD_BAZEL'
+module_line = '        \"$MODULE_OUT\",\n'
+with open(bazel_file, 'r') as f:
     lines = f.readlines()
-
-insert_line = -1
+new_lines = []
 depth = 0
-for i, line in enumerate(lines):
-    if 'module_outs' in line:
+in_module_outs = False
+inserted = False
+for line in lines:
+    if 'module_outs' in line and '=' in line:
+        in_module_outs = True
         depth = 0
-        for ch in line:
-            if ch == '[':
-                depth += 1
-            elif ch == ']':
-                depth -= 1
-        if depth > 0:
-            # multiline list, find closing ]
-            for j in range(i + 1, len(lines)):
-                for ch in lines[j]:
-                    if ch == '[':
-                        depth += 1
-                    elif ch == ']':
-                        depth -= 1
-                if depth <= 0:
-                    insert_line = j
-                    break
-            break
-        else:
-            # single-line list, insert before ]
-            for j in range(i, len(lines)):
-                if ']' in lines[j]:
-                    insert_line = j
-                    break
-            break
-
-if insert_line >= 0:
-    # determine indentation from nearby lines
-    indent = '        '
-    for k in range(insert_line - 1, max(insert_line - 5, 0), -1):
-        stripped = lines[k].strip()
-        if stripped.startswith('"') and stripped.endswith(','):
-            indent = lines[k][:len(lines[k]) - len(lines[k].lstrip())]
-            break
-    lines.insert(insert_line, indent + '"' + module_out + '",\n')
-    with open(bazel_path, 'w') as f:
-        f.writelines(lines)
-    print("[+] Added " + module_out + " to module_outs")
-else:
-    print("[!] Could not locate module_outs closing bracket")
-PYEOF
+    new_lines.append(line)
+    if in_module_outs:
+        depth += line.count('[') - line.count(']')
+        if not inserted and ']' in line and depth == 1:
+            new_lines.insert(-1, module_line)
+            inserted = True
+with open(bazel_file, 'w') as f:
+    f.writelines(new_lines)
+print('[+] Added $MODULE_OUT to module_outs')
+"
             else
                 echo "[+] Already contains $MODULE_OUT"
             fi
