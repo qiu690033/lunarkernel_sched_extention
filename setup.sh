@@ -40,12 +40,10 @@ perform_cleanup() {
 # Sets up or update lunarkernel_sched_extention environment
 setup_LSE() {
     echo "[+] Setting up lunarkernel_sched_extention..."
-    echo "[+] Kernel root: $GKI_ROOT"
-    echo "[+] Module dir: $LSE_MODULE_DIR"
 
     # In ABK context, the module is already cloned. Skip re-cloning.
     if [ -f "$LSE_MODULE_DIR/Kconfig" ] && [ -f "$LSE_MODULE_DIR/Makefile" ]; then
-        echo "[+] Using existing module directory."
+        echo "[+] Using existing module directory: $LSE_MODULE_DIR"
     elif [ -d "$GKI_ROOT/lunarkernel_sched_extention" ]; then
         echo "[+] Using existing clone in kernel root."
         LSE_MODULE_DIR="$GKI_ROOT/lunarkernel_sched_extention"
