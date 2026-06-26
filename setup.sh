@@ -56,17 +56,24 @@ setup_LSE() {
 
     MODULE_OUT="drivers/staging/lunarkernel_sched_extention/lunar_bsp_ext_sched.ko"
     for BUILD_BAZEL in "$GKI_ROOT/common/BUILD.bazel" "$GKI_ROOT/BUILD.bazel"; do
-        if [ -f "$BUILD_BAZEL" ] && grep -q "module_outs" "$BUILD_BAZEL"; then
+        if [ -f "$BUILD_BAZEL" ] && grep -q "module_implicit_outs\|module_outs" "$BUILD_BAZEL"; then
             if grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
                 echo "[+] $BUILD_BAZEL already contains $MODULE_OUT"
                 break
             fi
 
+            # Determine the correct parameter name (module_implicit_outs for GKI 6.12+, module_outs for older)
+            PARAM="module_outs"
+            if grep -q "module_implicit_outs" "$BUILD_BAZEL"; then
+                PARAM="module_implicit_outs"
+            fi
+            echo "[+] Using parameter: $PARAM"
+
             BUILDOZER=""
             if command -v buildozer >/dev/null 2>&1; then
                 BUILDOZER="buildozer"
-            elif [ -f "/usr/local/bin/buildozer" ]; then
-                BUILDOZER="/usr/local/bin/buildozer"
+            elif [ -f "/tmp/buildozer" ] && [ -x "/tmp/buildozer" ]; then
+                BUILDOZER="/tmp/buildozer"
             fi
 
             if [ -z "$BUILDOZER" ]; then
@@ -81,26 +88,27 @@ setup_LSE() {
             fi
 
             if [ -n "$BUILDOZER" ]; then
-                echo "[+] Using buildozer to add module_outs"
+                echo "[+] Using buildozer to add $PARAM"
                 cd "$GKI_ROOT"
-                "$BUILDOZER" "add module_outs $MODULE_OUT" "//common:kernel_aarch64" && echo "[+] buildozer succeeded" || echo "[!] buildozer failed, falling back to sed"
+                "$BUILDOZER" "add $PARAM $MODULE_OUT" "//common:kernel_aarch64" && echo "[+] buildozer succeeded" || echo "[!] buildozer failed"
                 cd "$DRIVER_STAGING_DIR"
             fi
 
             if [ -z "$BUILDOZER" ] || ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
-                echo "[+] Falling back to sed insertion"
-                python3 - "$BUILD_BAZEL" "$MODULE_OUT" <<'PYEOF'
+                echo "[+] Falling back to Python insertion"
+                python3 - "$BUILD_BAZEL" "$MODULE_OUT" "$PARAM" <<'PYEOF'
 import sys
 bazel_file = sys.argv[1]
 module_out = sys.argv[2]
+param_name = sys.argv[3]
 with open(bazel_file, 'r') as f:
     content = f.read()
-idx = content.find('module_outs')
+idx = content.find(param_name)
 if idx < 0:
-    print("[!] module_outs not found"); sys.exit(1)
+    print(f"[!] {param_name} not found"); sys.exit(1)
 bracket_start = content.find('[', idx)
 if bracket_start < 0:
-    print("[!] [ not found after module_outs"); sys.exit(1)
+    print(f"[!] [ not found after {param_name}"); sys.exit(1)
 depth = 0
 pos = bracket_start
 while pos < len(content):
@@ -113,7 +121,7 @@ while pos < len(content):
             content = content[:pos] + insert + content[pos:]
             with open(bazel_file, 'w') as f:
                 f.write(content)
-            print(f"[+] Added {module_out} to module_outs")
+            print(f"[+] Added {module_out} to {param_name}")
             break
     pos += 1
 PYEOF
