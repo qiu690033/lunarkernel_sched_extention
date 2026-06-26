@@ -66,7 +66,7 @@ setup_LSE() {
             if ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
                 echo "[+] Adding module_outs entry to $BUILD_BAZEL"
                 python3 -c "
-import sys
+import sys, re
 bazel_file = '$BUILD_BAZEL'
 module_line = '        \"$MODULE_OUT\",\n'
 with open(bazel_file, 'r') as f:
@@ -75,16 +75,24 @@ new_lines = []
 depth = 0
 in_module_outs = False
 inserted = False
-for line in lines:
-    if 'module_outs' in line and '=' in line:
+for i, line in enumerate(lines):
+    if not in_module_outs and re.match(r'\s*module_outs\s*=', line):
         in_module_outs = True
-        depth = 0
-    new_lines.append(line)
-    if in_module_outs:
+        depth = line.count('[') - line.count(']')
+        new_lines.append(line)
+        if depth == 0 and ']' in line and not inserted:
+            idx = line.rindex(']')
+            new_lines[-1] = line[:idx] + module_line.strip() + ',' + line[idx:]
+            inserted = True
+        continue
+    if in_module_outs and not inserted:
         depth += line.count('[') - line.count(']')
-        if not inserted and ']' in line and depth == 1:
+        new_lines.append(line)
+        if depth <= 0:
             new_lines.insert(-1, module_line)
             inserted = True
+    else:
+        new_lines.append(line)
 with open(bazel_file, 'w') as f:
     f.writelines(new_lines)
 print('[+] Added $MODULE_OUT to module_outs')
