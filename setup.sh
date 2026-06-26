@@ -64,43 +64,65 @@ setup_LSE() {
     # Add module to Bazel BUILD.bazel module_outs if present (GKI 6.12+ uses Bazel)
     MODULE_OUT="drivers/staging/lunarkernel_sched_extention/lunar_bsp_ext_sched.ko"
     for BUILD_BAZEL in "$GKI_ROOT/common/BUILD.bazel" "$GKI_ROOT/BUILD.bazel"; do
-        echo "[+] Checking $BUILD_BAZEL for module_outs..."
-        if [ -f "$BUILD_BAZEL" ]; then
-            if grep -q "module_outs" "$BUILD_BAZEL"; then
-                echo "[+] Found module_outs in $BUILD_BAZEL"
-                if ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
-                    echo "[+] Adding $MODULE_OUT to module_outs..."
-                    python3 -c "
+        if [ -f "$BUILD_BAZEL" ] && grep -q "module_outs" "$BUILD_BAZEL"; then
+            if ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
+                echo "[+] Adding module_outs entry to $BUILD_BAZEL"
+                python3 - "$BUILD_BAZEL" "$MODULE_OUT" <<'PYEOF'
 import sys
+
 bazel_path = sys.argv[1]
 module_out = sys.argv[2]
+
 with open(bazel_path, 'r') as f:
     lines = f.readlines()
-found = False
+
+insert_line = -1
+depth = 0
 for i, line in enumerate(lines):
-    if 'module_outs' in line and '=' in line:
-        # Found module_outs line, now find the closing ]
-        for j in range(i, len(lines)):
-            if ']' in lines[j]:
-                # Insert before the ]
-                indent = '        '
-                new_line = indent + '\"' + module_out + '\",\n'
-                lines.insert(j, new_line)
-                found = True
-                break
-        break
-if found:
+    if 'module_outs' in line:
+        depth = 0
+        for ch in line:
+            if ch == '[':
+                depth += 1
+            elif ch == ']':
+                depth -= 1
+        if depth > 0:
+            # multiline list, find closing ]
+            for j in range(i + 1, len(lines)):
+                for ch in lines[j]:
+                    if ch == '[':
+                        depth += 1
+                    elif ch == ']':
+                        depth -= 1
+                if depth <= 0:
+                    insert_line = j
+                    break
+            break
+        else:
+            # single-line list, insert before ]
+            for j in range(i, len(lines)):
+                if ']' in lines[j]:
+                    insert_line = j
+                    break
+            break
+
+if insert_line >= 0:
+    # determine indentation from nearby lines
+    indent = '        '
+    for k in range(insert_line - 1, max(insert_line - 5, 0), -1):
+        stripped = lines[k].strip()
+        if stripped.startswith('"') and stripped.endswith(','):
+            indent = lines[k][:len(lines[k]) - len(lines[k].lstrip())]
+            break
+    lines.insert(insert_line, indent + '"' + module_out + '",\n')
     with open(bazel_path, 'w') as f:
         f.writelines(lines)
-    print('[+] Added module_outs entry')
+    print("[+] Added " + module_out + " to module_outs")
 else:
-    print('[!] Could not find module_outs closing bracket')
-" "$BUILD_BAZEL" "$MODULE_OUT"
-                else
-                    echo "[+] $BUILD_BAZEL already contains module_outs entry."
-                fi
+    print("[!] Could not locate module_outs closing bracket")
+PYEOF
             else
-                echo "[+] No module_outs found in $BUILD_BAZEL, skipping."
+                echo "[+] Already contains $MODULE_OUT"
             fi
             break
         fi
