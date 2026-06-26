@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Use KERNEL_ROOT from ABK environment if available, otherwise fall back to pwd
 GKI_ROOT="${KERNEL_ROOT:-$(pwd)}"
 LSE_MODULE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -26,7 +25,6 @@ initialize_variables() {
     DRIVER_STAGING_KCONFIG=$DRIVER_STAGING_DIR/Kconfig
 }
 
-# Reverts modifications made by this script
 perform_cleanup() {
     echo "[+] Cleaning up..."
     [ -L "$DRIVER_STAGING_DIR/lunarkernel_sched_extention" ] && rm "$DRIVER_STAGING_DIR/lunarkernel_sched_extention" && echo "[-] Symlink removed."
@@ -37,11 +35,9 @@ perform_cleanup() {
     fi
 }
 
-# Sets up or update lunarkernel_sched_extention environment
 setup_LSE() {
     echo "[+] Setting up lunarkernel_sched_extention..."
 
-    # In ABK context, the module is already cloned. Skip re-cloning.
     if [ -f "$LSE_MODULE_DIR/Kconfig" ] && [ -f "$LSE_MODULE_DIR/Makefile" ]; then
         echo "[+] Using existing module directory: $LSE_MODULE_DIR"
     elif [ -d "$GKI_ROOT/lunarkernel_sched_extention" ]; then
@@ -55,50 +51,72 @@ setup_LSE() {
     cd "$DRIVER_STAGING_DIR"
     ln -sf "$(realpath --relative-to="$DRIVER_STAGING_DIR" "$LSE_MODULE_DIR")" "lunarkernel_sched_extention" && echo "[+] Symlink created."
 
-    # Add entries in Makefile and Kconfig if not already existing
     grep -q "lunarkernel_sched_extention" "$DRIVER_STAGING_MAKEFILE" || printf "\nobj-\$(CONFIG_LUNAR_SCHED_EXT) += lunarkernel_sched_extention/\n" >> "$DRIVER_STAGING_MAKEFILE" && echo "[+] Modified Makefile."
     grep -q "source \"drivers/staging/lunarkernel_sched_extention/Kconfig\"" "$DRIVER_STAGING_KCONFIG" || sed -i "/endif/i\source \"drivers/staging/lunarkernel_sched_extention/Kconfig\"" "$DRIVER_STAGING_KCONFIG" && echo "[+] Modified Kconfig."
 
-    # Add module to Bazel BUILD.bazel module_outs if present (GKI 6.12+ uses Bazel)
     MODULE_OUT="drivers/staging/lunarkernel_sched_extention/lunar_bsp_ext_sched.ko"
     for BUILD_BAZEL in "$GKI_ROOT/common/BUILD.bazel" "$GKI_ROOT/BUILD.bazel"; do
         if [ -f "$BUILD_BAZEL" ] && grep -q "module_outs" "$BUILD_BAZEL"; then
-            if ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
-                echo "[+] Adding module_outs entry to $BUILD_BAZEL"
-                python3 -c "
-import sys, re
-bazel_file = '$BUILD_BAZEL'
-module_line = '        \"$MODULE_OUT\",\n'
+            if grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
+                echo "[+] $BUILD_BAZEL already contains $MODULE_OUT"
+                break
+            fi
+
+            BUILDOZER=""
+            if command -v buildozer >/dev/null 2>&1; then
+                BUILDOZER="buildozer"
+            elif [ -f "/usr/local/bin/buildozer" ]; then
+                BUILDOZER="/usr/local/bin/buildozer"
+            fi
+
+            if [ -z "$BUILDOZER" ]; then
+                echo "[+] Downloading buildozer..."
+                curl -sLo /tmp/buildozer "https://github.com/bazelbuild/buildtools/releases/download/v7.3.1/buildozer-linux-amd64" 2>/dev/null \
+                || curl -sLo /tmp/buildozer "https://github.com/bazelbuild/buildtools/releases/latest/download/buildozer-linux-amd64" 2>/dev/null \
+                || true
+                if [ -f /tmp/buildozer ] && [ -s /tmp/buildozer ]; then
+                    chmod +x /tmp/buildozer
+                    BUILDOZER="/tmp/buildozer"
+                fi
+            fi
+
+            if [ -n "$BUILDOZER" ]; then
+                echo "[+] Using buildozer to add module_outs"
+                cd "$GKI_ROOT"
+                "$BUILDOZER" "add module_outs $MODULE_OUT" "//common:kernel_aarch64" && echo "[+] buildozer succeeded" || echo "[!] buildozer failed, falling back to sed"
+                cd "$DRIVER_STAGING_DIR"
+            fi
+
+            if [ -z "$BUILDOZER" ] || ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
+                echo "[+] Falling back to sed insertion"
+                python3 - "$BUILD_BAZEL" "$MODULE_OUT" <<'PYEOF'
+import sys
+bazel_file = sys.argv[1]
+module_out = sys.argv[2]
 with open(bazel_file, 'r') as f:
-    lines = f.readlines()
-new_lines = []
+    content = f.read()
+idx = content.find('module_outs')
+if idx < 0:
+    print("[!] module_outs not found"); sys.exit(1)
+bracket_start = content.find('[', idx)
+if bracket_start < 0:
+    print("[!] [ not found after module_outs"); sys.exit(1)
 depth = 0
-in_module_outs = False
-inserted = False
-for i, line in enumerate(lines):
-    if not in_module_outs and re.match(r'\s*module_outs\s*=', line):
-        in_module_outs = True
-        depth = line.count('[') - line.count(']')
-        new_lines.append(line)
-        if depth == 0 and ']' in line and not inserted:
-            idx = line.rindex(']')
-            new_lines[-1] = line[:idx] + module_line.strip() + ',' + line[idx:]
-            inserted = True
-        continue
-    if in_module_outs and not inserted:
-        depth += line.count('[') - line.count(']')
-        new_lines.append(line)
-        if depth <= 0:
-            new_lines.insert(-1, module_line)
-            inserted = True
-    else:
-        new_lines.append(line)
-with open(bazel_file, 'w') as f:
-    f.writelines(new_lines)
-print('[+] Added $MODULE_OUT to module_outs')
-"
-            else
-                echo "[+] Already contains $MODULE_OUT"
+pos = bracket_start
+while pos < len(content):
+    if content[pos] == '[': depth += 1
+    elif content[pos] == ']':
+        depth -= 1
+        if depth == 0:
+            indent = "        "
+            insert = f'{indent}"{module_out}",\n'
+            content = content[:pos] + insert + content[pos:]
+            with open(bazel_file, 'w') as f:
+                f.write(content)
+            print(f"[+] Added {module_out} to module_outs")
+            break
+    pos += 1
+PYEOF
             fi
             break
         fi
@@ -107,7 +125,6 @@ print('[+] Added $MODULE_OUT to module_outs')
     echo '[+] Done.'
 }
 
-# Process command-line arguments
 if [ "$#" -eq 0 ]; then
     initialize_variables
     setup_LSE
