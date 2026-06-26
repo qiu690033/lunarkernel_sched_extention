@@ -66,9 +66,49 @@ setup_LSE() {
     for BUILD_BAZEL in "$GKI_ROOT/common/BUILD.bazel" "$GKI_ROOT/BUILD.bazel"; do
         if [ -f "$BUILD_BAZEL" ] && grep -q "module_outs" "$BUILD_BAZEL"; then
             if ! grep -q "$MODULE_OUT" "$BUILD_BAZEL"; then
-                sed -i "/module_outs/,/]/{
-                    /]/i\\        \"$MODULE_OUT\",
-                }" "$BUILD_BAZEL" && echo "[+] Modified $BUILD_BAZEL (added module_outs)."
+                python3 - "$BUILD_BAZEL" "$MODULE_OUT" <<'PYEOF'
+import sys, re
+
+bazel_path = sys.argv[1]
+module_out = sys.argv[2]
+
+with open(bazel_path, 'r') as f:
+    content = f.read()
+
+# Find the kernel_aarch64 module_outs list and insert before the closing ]
+# Pattern: module_outs = [\n  ...\n]
+# We insert the new entry before the ] that closes this specific list
+pattern = r'(module_outs\s*=\s*\[)([^\]]*)(\])'
+
+def insert_module(m):
+    header = m.group(1)
+    items = m.group(2)
+    footer = m.group(3)
+    new_entry = '        "' + module_out + '",\n'
+    # Check indentation of existing items for consistency
+    existing_lines = [l for l in items.split('\n') if l.strip()]
+    if existing_lines:
+        indent = re.match(r'(\s*)', existing_lines[-1]).group(1)
+    else:
+        indent = '        '
+    if items.rstrip():
+        # There are existing entries - ensure trailing comma and add new entry
+        if not items.rstrip().endswith(','):
+            items = items.rstrip() + ',\n'
+        else:
+            items = items.rstrip() + '\n'
+        return header + items + indent + '"' + module_out + '",\n' + footer
+    else:
+        # Empty list
+        return header + '\n' + indent + '"' + module_out + '",\n' + footer
+
+new_content = re.sub(pattern, insert_module, content, count=1)
+
+with open(bazel_path, 'w') as f:
+    f.write(new_content)
+
+print(f"[+] Added {module_out} to module_outs in {bazel_path}")
+PYEOF
             else
                 echo "[+] $BUILD_BAZEL already contains module_outs entry."
             fi
